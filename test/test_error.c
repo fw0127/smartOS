@@ -1,0 +1,205 @@
+/* Error policies, hooks and the fatal path (docs/03 section 9). */
+#include <string.h>
+#include "test_util.h"
+
+static tt_t g_t[3];
+static sos_task_desc_t g_d[3];
+static sos_cfg_root_t g_root;
+
+static int g_hook_err;
+static sos_status_t g_hook_err_code;
+static int g_hook_fatal;
+static sos_status_t g_hook_fatal_code;
+
+static void on_task_error(sos_task_id_t id, sos_status_t code)
+{
+    (void)id;
+    g_hook_err++;
+    g_hook_err_code = code;
+}
+
+static void on_fatal(sos_status_t code)
+{
+    g_hook_fatal++;
+    g_hook_fatal_code = code;
+}
+
+static const sos_hooks_t g_hooks = { NULL, on_task_error, on_fatal, NULL, NULL };
+
+static void reset(void)
+{
+    fresh(0u);
+    memset(g_t, 0, sizeof g_t);
+    g_hook_err = 0;
+    g_hook_fatal = 0;
+    g_hook_err_code = SOS_OK;
+    g_hook_fatal_code = SOS_OK;
+}
+
+static sos_status_t start(uint8_t n)
+{
+    g_root = troot(g_d, n);
+    g_root.hooks = &g_hooks;
+    return sos_init(&g_root);
+}
+
+void test_policy_restart_limit(void)
+{
+    uint32_t reason;
+
+    reset();
+    g_d[0] = tdesc("f", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_d[0].on_error = SOS_ON_ERR_RESTART;
+    g_d[0].max_restart = 2u;
+    g_t[0].dflt = SOS_RUN_ERR;
+    CHECK_EQ(start(1u), SOS_OK);
+
+    EXPECT_HALT(run_for(10000u), reason);
+    CHECK_EQ(reason, SOS_E_RESTART_LIMIT);
+    CHECK_EQ(g_t[0].runs, 3u);
+    CHECK_EQ(g_t[0].inits, 3u);           /* initial + 2 restarts */
+    CHECK_EQ(g_t[0].dones, 3u);           /* before each restart attempt */
+    CHECK_EQ(g_hook_err, 3);
+    CHECK_EQ(g_hook_fatal, 1);
+    CHECK_EQ(g_hook_fatal_code, SOS_E_RESTART_LIMIT);
+}
+
+void test_policy_restart_counter_resets(void)
+{
+    static const sos_run_result_t script[] =
+        { SOS_RUN_ERR, SOS_RUN_OK, SOS_RUN_ERR, SOS_RUN_OK, SOS_RUN_ERR, SOS_RUN_OK };
+    uint32_t reason;
+
+    reset();
+    g_d[0] = tdesc("f", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_d[0].on_error = SOS_ON_ERR_RESTART;
+    g_d[0].max_restart = 1u;
+    g_t[0].script = script;
+    g_t[0].script_len = 6u;
+    CHECK_EQ(start(1u), SOS_OK);
+
+    EXPECT_HALT(run_for(10000u), reason);
+    CHECK_EQ(reason, 0xFFFFFFFFu);        /* no halt: each success clears the count */
+    CHECK_EQ(g_t[0].inits, 4u);
+}
+
+void test_policy_stop(void)
+{
+    reset();
+    g_d[0] = tdesc("f", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_d[0].on_error = SOS_ON_ERR_STOP;
+    g_d[1] = tdesc("ok", 1u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[1]);
+    g_t[0].dflt = SOS_RUN_ERR;
+    CHECK_EQ(start(2u), SOS_OK);
+
+    run_for(5000u);
+    CHECK_EQ(g_t[0].runs, 1u);
+    CHECK_EQ(g_t[0].dones, 1u);
+    CHECK_EQ(g_t[1].runs, 5u);
+    CHECK_EQ(g_hook_err_code, SOS_E_TASK);
+}
+
+void test_policy_ignore_no_hot_loop(void)
+{
+    sos_error_entry_t e;
+
+    reset();
+    g_d[0] = tdesc("f", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_d[0].on_error = SOS_ON_ERR_IGNORE;
+    g_t[0].dflt = SOS_RUN_ERR;
+    CHECK_EQ(start(1u), SOS_OK);
+
+    run_for(5000u);
+    CHECK_EQ(g_t[0].runs, 5u);
+    CHECK_EQ(sos_error_count(), 5u);
+    CHECK_EQ(sos_error_get(0u, &e), SOS_OK);
+    CHECK_EQ(e.task, 0u);
+    CHECK_EQ(e.code, SOS_E_TASK);
+}
+
+void test_policy_fatal(void)
+{
+    uint32_t reason;
+
+    reset();
+    g_d[0] = tdesc("f", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_t[0].dflt = SOS_RUN_ERR;                           /* tdesc default: FATAL */
+    CHECK_EQ(start(1u), SOS_OK);
+
+    EXPECT_HALT(run_for(5000u), reason);
+    CHECK_EQ(reason, SOS_E_TASK);
+    CHECK_EQ(g_hook_fatal, 1);
+}
+
+void test_unknown_result(void)
+{
+    reset();
+    g_d[0] = tdesc("f", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_d[0].on_error = SOS_ON_ERR_IGNORE;
+    g_t[0].dflt = (sos_run_result_t)7;
+    CHECK_EQ(start(1u), SOS_OK);
+
+    run_for(1000u);
+    CHECK_EQ(g_hook_err_code, SOS_E_RESULT);
+}
+
+void test_init_failure_policies(void)
+{
+    sos_task_stats_t st;
+    uint32_t reason;
+
+    /* RESTART: retried within max_restart, then runs normally */
+    reset();
+    g_d[0] = tdesc("r", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_d[0].on_error = SOS_ON_ERR_RESTART;
+    g_d[0].max_restart = 3u;
+    g_t[0].init_failures = 2u;
+    /* STOP: never runs */
+    g_d[1] = tdesc("s", 1u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[1]);
+    g_d[1].on_error = SOS_ON_ERR_STOP;
+    g_t[1].init_failures = 1u;
+    CHECK_EQ(start(2u), SOS_OK);
+    run_for(3000u);
+
+    CHECK_EQ(g_t[0].inits, 3u);
+    CHECK_EQ(g_t[0].dones, 0u);           /* failed inits are not undone */
+    CHECK_EQ(g_t[0].runs, 3u);
+    CHECK_EQ(g_t[1].runs, 0u);
+    CHECK_EQ(sos_task_get_stats(1u, &st), SOS_OK);
+    CHECK_EQ(st.state, SOS_STATE_STOPPED);
+    CHECK_EQ(g_hook_err, 3);
+
+    /* FATAL: sos_init itself halts */
+    reset();
+    g_d[0] = tdesc("f", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_t[0].init_failures = 1u;
+    EXPECT_HALT((void)start(1u), reason);
+    CHECK_EQ(reason, SOS_E_INIT);
+}
+
+static void restart_self_first(tt_t *self, sos_events_t ev)
+{
+    (void)ev;
+    if (self->runs == 1u)
+    {
+        CHECK_EQ(sos_task_restart(sos_task_self()), SOS_OK);
+    }
+}
+
+void test_restart_request(void)
+{
+    sos_task_stats_t st;
+
+    reset();
+    g_d[0] = tdesc("r", 0u, SOS_TRIG_PERIODIC, 1000u, 500u, 0u, &g_t[0]);
+    g_t[0].action = restart_self_first;
+    CHECK_EQ(start(1u), SOS_OK);
+
+    run_for(3000u);
+    CHECK_EQ(g_t[0].inits, 2u);
+    CHECK_EQ(g_t[0].dones, 1u);
+    CHECK_EQ(g_trace[0].at, 500u);
+    CHECK_EQ(g_trace[1].at, 1000u);       /* re-armed: now + offset */
+    CHECK_EQ(sos_task_get_stats(0u, &st), SOS_OK);
+    CHECK_EQ(st.restart_cnt, 0u);         /* a requested restart is not a failure */
+}
