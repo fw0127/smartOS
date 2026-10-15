@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.0 — ring buffers and supervision (unreleased)
+
+- `sos_ring`: single-producer/single-consumer ring buffers, by value
+  (`put/get/peek`) and zero-copy (`reserve/commit`, `acquire/release`) (D8);
+  optional consumer notification; overflow counting and hook; statistics.
+- Supervision: step budgets with overrun hook (optionally an error), alive
+  windows with error policies, health signal gated by alive state, running
+  also while idle; precision warning for budgets below 10 ticks.
+- Configuration ABI 2: `rings` / `ring_count` in `sos_cfg_root_t`.
+- Host thread platform (POSIX): real time, other threads as asynchronous
+  contexts; concurrency tests, also under ThreadSanitizer.
+- Fix: background tasks with id >= 32 no longer shift past the ready bitmap.
+- LICENSE now carries the verbatim MPL-2.0 text.
+
 ## v0.1.0 — kernel skeleton (unreleased)
 
 - Cooperative run-to-completion scheduler: ready bitmap with constant-time
@@ -15,5 +29,3 @@
 - Host tests for 16/32/64-bit tick widths, also under ASan/UBSan.
 - Hand-written configuration example `examples/manual_cfg`.
 
-Not yet: ring buffers, budget/alive supervision and health signal (v0.2),
-generator `sosgen` (v0.3).

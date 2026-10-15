@@ -3,7 +3,7 @@
 #define TESTS(X) \
     X(test_time_reached_wraps) X(test_time_conversion) X(test_time_elapsed_across_wrap) \
     X(test_bitmap_lowest) \
-    X(test_cfg_valid) X(test_cfg_rejects) X(test_cfg_time_range) X(test_cfg_fg_limit) \
+    X(test_cfg_valid) X(test_cfg_rejects) X(test_cfg_time_range) X(test_cfg_fg_limit) X(test_background_high_id) \
     X(test_errlog_ring) \
     X(test_periodic_offset) X(test_periodic_offset_across_wrap) X(test_priority_order) \
     X(test_event_preempts_between_steps) X(test_event_during_own_run) X(test_event_mask) \
@@ -13,7 +13,11 @@
     X(test_periodic_and_event) X(test_stop) X(test_stats_state) \
     X(test_policy_restart_limit) X(test_policy_restart_counter_resets) X(test_policy_stop) \
     X(test_policy_ignore_no_hot_loop) X(test_policy_fatal) X(test_unknown_result) \
-    X(test_init_failure_policies) X(test_restart_request)
+    X(test_init_failure_policies) X(test_restart_request) \
+    X(test_ring_fifo_full_empty) X(test_ring_index_wrap) X(test_ring_zero_copy) \
+    X(test_ring_notifies_consumer) X(test_ring_cfg_rejects) \
+    X(test_budget_overrun) X(test_precision_warning) X(test_health_while_idle) \
+    X(test_alive_starvation_stops_health) X(test_alive_restart_then_fatal) X(test_alive_stop)
 
 #define DECLARE(name) void name(void);
 TESTS(DECLARE)
@@ -25,7 +29,7 @@ TESTS(DECLARE)
 
 int main(void)
 {
-    printf("smartOs v0.1 host tests, %d-bit ticks\n", SOS_PLATFORM_TICK_BITS);
+    printf("smartOs host tests (virtual time), %d-bit ticks\n", SOS_PLATFORM_TICK_BITS);
     TESTS(RUN)
     printf("%d checks, %d failed\n", t_checks, t_fail);
     return (t_fail == 0) ? 0 : 1;

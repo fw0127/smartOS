@@ -195,3 +195,34 @@ void test_errlog_ring(void)
     CHECK_EQ(e.code, SOS_E_RESULT);
     CHECK_EQ(sos_error_get(4u, &e), SOS_E_PARAM);
 }
+
+/* Regression: background task ids may be >= 32 (outside the ready bitmap).
+ * Stopping and restarting one must not shift past the bitmap width. */
+void test_background_high_id(void)
+{
+    sos_task_desc_t d[33];
+    static sos_cfg_root_t root;
+    sos_task_stats_t st;
+    uint8_t i;
+
+    fresh(0u);
+    memset(g_c, 0, sizeof g_c);
+    for (i = 0u; i < 32u; i++)
+    {
+        d[i] = tdesc("t", i, SOS_TRIG_EVENT, 0u, 0u, 1u, &g_c[i]);
+    }
+    d[32] = tdesc("bg", 0u, SOS_TRIG_BACKGROUND, 0u, 0u, 0u, &g_c[32]);
+    root = troot(d, 33u);
+    CHECK_EQ(sos_init(&root), SOS_OK);
+    CHECK_EQ(sos_poll(NULL), SOS_POLL_RAN);
+    CHECK_EQ(g_c[32].runs, 1u);
+    CHECK_EQ(sos_task_get_stats(32u, &st), SOS_OK);
+    CHECK_EQ(st.state, SOS_STATE_READY);
+    CHECK_EQ(sos_task_stop(32u), SOS_OK);
+    CHECK_EQ(sos_task_restart(32u), SOS_OK);
+    CHECK_EQ(sos_poll(NULL), SOS_POLL_RAN);
+    CHECK_EQ(g_c[32].runs, 2u);
+    CHECK_EQ(sos_event_set(31u, 1u), SOS_OK);
+    CHECK_EQ(sos_poll(NULL), SOS_POLL_RAN);
+    CHECK_EQ(g_c[31].runs, 1u);
+}

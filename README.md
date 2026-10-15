@@ -1,6 +1,6 @@
 # smartOs — 最小调度核心(设计阶段)
 
-> 状态:**v0.1 内核骨架已实现**(主机虚拟时间平台)  ·  许可证:MPL-2.0
+> 状态:**v0.2 已实现**:调度核心、环形缓冲、监控  ·  许可证:MPL-2.0
 > 设计来源:对一个既有嵌入式固件执行模型的抽象提炼
 
 ## 一句话定位
@@ -13,6 +13,8 @@ smartOs 是一个**与硬件无关**的**协作式(非抢占)、运行到完成�
 ```bash
 make test        # 在 16/32/64 位计数宽度下运行全部主机测试
 make test-san    # 同上,开启 AddressSanitizer + UBSan
+make test-thread # 线程平台上的并发测试(真实时间,线程模拟中断)
+make test-tsan   # 同上,开启 ThreadSanitizer
 make example     # 构建手写配置示例,运行 ./build/manual_cfg
 ```
 
@@ -70,3 +72,8 @@ make example     # 构建手写配置示例,运行 ./build/manual_cfg
 | [docs/05_平台契约与路线图.md](docs/05_平台契约与路线图.md) | 平台能力契约、测试策略、独立成库、决策记录、路线图 | 否 |
 | [docs/06_配置描述文件.md](docs/06_配置描述文件.md) | TOML 描述文件格式与生成器 `sosgen` | 否 |
 | [docs/A_附录_平台适配示例.md](docs/A_附录_平台适配示例.md) | 契约在主机、通用 MCU、具体芯片上的映射示例 | 是(仅作示例) |
+
+## 许可证
+
+smartOs 以 [MPL-2.0](LICENSE) 发布。MPL-2.0 是文件级弱著作权许可:修改 smartOs 自身的文件需要以 MPL-2.0 公开这些修改;使用方自己的任务代码、平台适配和描述文件不受影响,可以闭源。
+由 `tools/sosgen` 生成的文件(`sos_cfg_gen.*`、`sos_cfg.h`)属于使用方的配置,不受 MPL-2.0 约束。详见 [05 篇 3.2 节](docs/05_平台契约与路线图.md)。

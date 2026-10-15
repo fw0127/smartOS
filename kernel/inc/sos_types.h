@@ -24,6 +24,18 @@
 #ifndef SOS_CFG_ERRLOG_DEPTH
 #define SOS_CFG_ERRLOG_DEPTH        8u
 #endif
+#ifndef SOS_CFG_MAX_RINGS
+#define SOS_CFG_MAX_RINGS           8u
+#endif
+#ifndef SOS_CFG_OVERRUN_IS_ERROR
+#define SOS_CFG_OVERRUN_IS_ERROR    0
+#endif
+#ifndef SOS_CFG_HEALTH_ENABLE
+#define SOS_CFG_HEALTH_ENABLE       1
+#endif
+#ifndef SOS_CFG_HEALTH_MIN_INTERVAL
+#define SOS_CFG_HEALTH_MIN_INTERVAL 10000u      /* configuration time units */
+#endif
 
 #if (SOS_CFG_MAX_TASKS < 1) || (SOS_CFG_MAX_TASKS > 254)
 #error "SOS_CFG_MAX_TASKS must be in 1..254"
@@ -31,20 +43,28 @@
 #if SOS_CFG_ERRLOG_DEPTH < 1
 #error "SOS_CFG_ERRLOG_DEPTH must be >= 1"
 #endif
+#if SOS_CFG_MAX_RINGS > 254
+#error "SOS_CFG_MAX_RINGS must be <= 254"
+#endif
+#if SOS_CFG_HEALTH_MIN_INTERVAL < 1
+#error "SOS_CFG_HEALTH_MIN_INTERVAL must be >= 1"
+#endif
 
 /* ---- versions ------------------------------------------------------------ */
 #define SOS_VERSION_MAJOR   0u
-#define SOS_VERSION_MINOR   1u
+#define SOS_VERSION_MINOR   2u
 #define SOS_VERSION_PATCH   0u
-#define SOS_ABI_VERSION     1u      /* layout of sos_cfg_root_t and friends */
+#define SOS_ABI_VERSION     2u      /* layout of sos_cfg_root_t and friends */
 
 /* ---- basic types --------------------------------------------------------- */
 typedef uint32_t sos_time_t;        /* configuration time, SOS_TIME_UNITS_PER_SEC */
 typedef uint32_t sos_events_t;
 typedef uint8_t  sos_task_id_t;
+typedef uint8_t  sos_ring_t;        /* ring buffer id: index in the ring table */
 
 #define SOS_EV_ALARM        ((sos_events_t)0x80000000u)
 #define SOS_TASK_NONE       ((sos_task_id_t)0xFFu)
+#define SOS_RING_MAX_CAP    32768u  /* power of two, 16-bit free-running indices */
 #define SOS_FG_MAX          32u     /* foreground tasks: one 32-bit ready bitmap */
 
 typedef enum
@@ -104,6 +124,18 @@ typedef struct
     void (*on_ring_overflow)(uint8_t ring);
 } sos_hooks_t;
 
+/* Ring buffer: one producer (task or asynchronous context), one consumer task.
+ * Storage is elem_size * capacity bytes, capacity a power of two. */
+typedef struct
+{
+    const char   *name;
+    void         *storage;
+    uint16_t      elem_size;
+    uint16_t      capacity;
+    sos_task_id_t consumer;       /* task to notify, SOS_TASK_NONE = none */
+    sos_events_t  notify;         /* event set on the consumer per publish, 0 = none */
+} sos_ring_desc_t;
+
 typedef struct
 {
     uint16_t               abi_version;   /* must equal SOS_ABI_VERSION */
@@ -111,6 +143,8 @@ typedef struct
     uint32_t               digest;        /* configuration digest, informative */
     const sos_task_desc_t *tasks;         /* foreground (by prio), then background */
     uint8_t                task_count;
+    const sos_ring_desc_t *rings;         /* may be NULL when ring_count == 0 */
+    uint8_t                ring_count;
     const sos_hooks_t     *hooks;         /* may be NULL */
 } sos_cfg_root_t;
 
@@ -123,6 +157,14 @@ typedef struct
     uint16_t         overrun_cnt;
     sos_tick_t       max_step;
 } sos_task_stats_t;
+
+typedef struct
+{
+    uint16_t capacity;
+    uint16_t count;
+    uint16_t high_water;
+    uint16_t overflow_cnt;
+} sos_ring_stats_t;
 
 typedef struct
 {

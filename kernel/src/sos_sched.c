@@ -13,7 +13,7 @@
 
 sos_kernel_t sos_k;
 
-#define L_BIT(id)   ((uint32_t)1u << (id))
+#define L_BIT(id)   ((uint32_t)1u << (id))     /* foreground ids (< 32) only */
 #define L_DESC(id)  (&sos_k.cfg->tasks[(id)])
 
 /* ------------------------------------------------------------------------ */
@@ -25,16 +25,18 @@ void sos_i_ready_set(sos_task_id_t id)
     sos_k.ready_bits |= L_BIT(id);
 }
 
-static void l_ready_clear(sos_task_id_t id)
-{
-    sos_platform_critical_enter();
-    sos_k.ready_bits &= ~L_BIT(id);
-    sos_platform_critical_exit();
-}
-
 static bool l_is_fg(sos_task_id_t id)
 {
     return id < sos_k.fg_count;
+}
+
+static bool l_is_ready(sos_task_id_t id)
+{
+    bool r;
+    sos_platform_critical_enter();
+    r = (sos_k.ready_bits & L_BIT(id)) != 0u;
+    sos_platform_critical_exit();
+    return r;
 }
 
 static bool l_is_periodic(sos_task_id_t id)
@@ -75,20 +77,23 @@ static void l_tcb_arm(sos_task_id_t id, sos_tick_t now)
 {
     sos_tcb_t *t = &sos_k.tcb[id];
 
-    sos_platform_critical_enter();
+    if (l_is_fg(id))
+    {
+        sos_k.deferred_bits &= ~L_BIT(id);
+    }
+    t->flags = 0u;
+    t->again_cnt = 0u;
+    t->last_alive = now;
+    t->next_release = (sos_tick_t)(now + t->offset);
+
+    sos_platform_critical_enter();          /* state and events are read by async posters */
     t->events = 0u;
     if (l_is_fg(id))
     {
         sos_k.ready_bits &= ~L_BIT(id);
     }
-    sos_platform_critical_exit();
-    sos_k.deferred_bits &= ~L_BIT(id);
-
-    t->flags = 0u;
-    t->again_cnt = 0u;
-    t->last_alive = now;
-    t->next_release = (sos_tick_t)(now + t->offset);
     t->state = (uint8_t)SOS_STATE_WAITING;
+    sos_platform_critical_exit();
     if (l_is_periodic(id))
     {
         l_due_update(now, t->next_release);
@@ -101,13 +106,19 @@ static void l_stop(sos_task_id_t id)
 
     if (t->state == (uint8_t)SOS_STATE_WAITING)
     {
+        sos_platform_critical_enter();
         if (l_is_fg(id))
         {
-            l_ready_clear(id);
+            sos_k.ready_bits &= ~L_BIT(id);
         }
-        sos_k.deferred_bits &= ~L_BIT(id);
-        t->flags = 0u;
+        t->events = 0u;
         t->state = (uint8_t)SOS_STATE_STOPPED;
+        sos_platform_critical_exit();
+        if (l_is_fg(id))
+        {
+            sos_k.deferred_bits &= ~L_BIT(id);
+        }
+        t->flags = 0u;
         if (L_DESC(id)->done != NULL)
         {
             L_DESC(id)->done(L_DESC(id)->ctx);
@@ -147,7 +158,9 @@ static void l_start_task(sos_task_id_t id, bool policy_restart)
                 policy_restart = true;          /* retry, bounded by max_restart */
                 break;
             case SOS_ON_ERR_STOP:
+                sos_platform_critical_enter();
                 t->state = (uint8_t)SOS_STATE_STOPPED;
+                sos_platform_critical_exit();
                 return;
             case SOS_ON_ERR_IGNORE:
                 l_tcb_arm(id, sos_platform_now());
@@ -193,7 +206,7 @@ static void l_advance_release(sos_task_id_t id, sos_tick_t now)
     l_due_update(now, t->next_release);
 }
 
-static void l_task_error(sos_task_id_t id, sos_status_t code, sos_tick_t now)
+void sos_i_task_error(sos_task_id_t id, sos_status_t code, sos_tick_t now)
 {
     sos_i_error_log(id, code);
     l_hook_task_error(id, code);
@@ -201,7 +214,10 @@ static void l_task_error(sos_task_id_t id, sos_status_t code, sos_tick_t now)
     switch (L_DESC(id)->on_error)
     {
         case SOS_ON_ERR_IGNORE:
-            l_advance_release(id, now);     /* no hot loop on a failing periodic task */
+            if ((code == SOS_E_TASK) || (code == SOS_E_RESULT))
+            {
+                l_advance_release(id, now); /* no hot loop on a failing periodic task */
+            }
             break;
         case SOS_ON_ERR_RESTART:
             l_restart(id, true);
@@ -275,6 +291,7 @@ static void l_dispatch(sos_task_id_t id)
     sos_tick_t t0;
     sos_tick_t t1;
     sos_tick_t dt;
+    bool overrun_error;
 
     sos_platform_critical_enter();
     if (l_is_fg(id))
@@ -296,6 +313,7 @@ static void l_dispatch(sos_task_id_t id)
     {
         t->max_step = dt;
     }
+    overrun_error = sos_i_step_overrun(id, dt);
     sos_k.deferred_bits = 0u;               /* the yielded opportunity was given */
 
     if ((t->flags & SOS_F_STOP_REQ) != 0u)
@@ -315,12 +333,14 @@ static void l_dispatch(sos_task_id_t id)
             t->restart_cnt = 0u;
             t->again_cnt = 0u;
             t->last_alive = t1;
+            t->flags &= (uint8_t)~SOS_F_ALIVE_FAIL;
             l_advance_release(id, t1);
             break;
 
         case SOS_RUN_AGAIN:
             t->restart_cnt = 0u;
             t->last_alive = t1;
+            t->flags &= (uint8_t)~SOS_F_ALIVE_FAIL;
             if (l_is_fg(id))
             {
                 sos_platform_critical_enter();
@@ -344,13 +364,18 @@ static void l_dispatch(sos_task_id_t id)
 
         case SOS_RUN_ERR:
             t->again_cnt = 0u;
-            l_task_error(id, SOS_E_TASK, t1);
+            sos_i_task_error(id, SOS_E_TASK, t1);
             break;
 
         default:
             t->again_cnt = 0u;
-            l_task_error(id, SOS_E_RESULT, t1);
+            sos_i_task_error(id, SOS_E_RESULT, t1);
             break;
+    }
+
+    if (overrun_error && (t->state == (uint8_t)SOS_STATE_WAITING))
+    {
+        sos_i_task_error(id, SOS_E_OVERRUN, t1);
     }
 }
 
@@ -429,7 +454,7 @@ static sos_status_t l_check(const sos_cfg_root_t *root, uint8_t *fg_out)
         }
     }
     *fg_out = fg;
-    return SOS_OK;
+    return sos_i_ring_check(root);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -462,6 +487,9 @@ sos_status_t sos_init(const sos_cfg_root_t *root)
     sos_k.ready_bits = 0u;
     sos_k.deferred_bits = 0u;
     sos_k.next_due_valid = false;
+    sos_k.ring_count = root->ring_count;
+    sos_i_ring_reset();
+    sos_i_supervise_reset(sos_platform_now());
 
     for (i = 0u; i < sos_k.task_count; i++)
     {
@@ -476,6 +504,12 @@ sos_status_t sos_init(const sos_cfg_root_t *root)
         t->max_step = 0u;
         t->period = sos_time_to_ticks(root->tasks[i].period);
         t->offset = sos_time_to_ticks(root->tasks[i].offset);
+        t->budget = sos_time_to_ticks(root->tasks[i].budget);
+        t->alive_window = sos_time_to_ticks(root->tasks[i].alive_window);
+        if ((t->budget != 0u) && (t->budget < 10u))
+        {
+            sos_i_error_log(i, SOS_W_PRECISION);    /* resolution > budget / 10 */
+        }
     }
 
     sos_k.initialized = true;               /* events may be posted from init() */
@@ -499,6 +533,7 @@ sos_poll_result_t sos_poll(sos_tick_t *next_deadline)
 
     now = sos_platform_now();
     l_time_release(now);
+    sos_i_supervise(now);
 
     sos_platform_critical_enter();
     cand = sos_k.ready_bits & ~sos_k.deferred_bits;
@@ -531,8 +566,13 @@ sos_poll_result_t sos_poll(sos_tick_t *next_deadline)
 
     if (next_deadline != NULL)
     {
-        *next_deadline = sos_k.next_due_valid ? sos_k.next_due
-                                              : (sos_tick_t)(now + (sos_tick_t)(SOS_TICK_HALF - 1u));
+        sos_tick_t dl = sos_k.sup_next;     /* supervision keeps running while idle */
+        if (sos_k.next_due_valid
+            && ((sos_tick_t)(sos_k.next_due - now) < (sos_tick_t)(dl - now)))
+        {
+            dl = sos_k.next_due;
+        }
+        *next_deadline = dl;
     }
     return SOS_POLL_IDLE;
 }
@@ -670,7 +710,7 @@ sos_status_t sos_task_get_stats(sos_task_id_t id, sos_task_stats_t *out)
     {
         out->state = (sos_task_state_t)t->state;
     }
-    else if (!l_is_fg(id) || ((sos_k.ready_bits & L_BIT(id)) != 0u))
+    else if (!l_is_fg(id) || l_is_ready(id))
     {
         out->state = SOS_STATE_READY;               /* background tasks are always ready */
     }

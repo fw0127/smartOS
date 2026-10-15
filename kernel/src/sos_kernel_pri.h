@@ -15,6 +15,7 @@
 #define SOS_F_ALARM       0x01u
 #define SOS_F_STOP_REQ    0x02u
 #define SOS_F_RESTART_REQ 0x04u
+#define SOS_F_ALIVE_FAIL  0x08u   /* alive window exceeded, not yet recovered */
 
 typedef struct
 {
@@ -27,11 +28,23 @@ typedef struct
     volatile sos_events_t events;
     sos_tick_t            period;       /* converted from the descriptor */
     sos_tick_t            offset;
+    sos_tick_t            budget;
+    sos_tick_t            alive_window;
     sos_tick_t            next_release;
     sos_tick_t            alarm_at;
     sos_tick_t            last_alive;
     sos_tick_t            max_step;
 } sos_tcb_t;
+
+typedef struct
+{
+    volatile uint16_t head;       /* free-running write index (producer) */
+    volatile uint16_t tail;       /* free-running read index (consumer) */
+    bool              reserved;   /* producer holds a slot (reserve/commit) */
+    bool              acquired;   /* consumer holds a slot (acquire/release) */
+    uint16_t          high_water;
+    uint16_t          overflow_cnt;
+} sos_ring_rt_t;
 
 typedef struct
 {
@@ -47,6 +60,12 @@ typedef struct
     uint8_t               fg_count;
     uint8_t               bg_next;
     sos_task_id_t         current;
+    /* supervision */
+    sos_tick_t            sup_interval;
+    sos_tick_t            sup_next;       /* next supervision check */
+    /* ring buffers */
+    uint8_t               ring_count;
+    sos_ring_rt_t         ring[SOS_CFG_MAX_RINGS];
     /* error log */
     uint32_t              err_total;
     sos_error_entry_t     err_log[SOS_CFG_ERRLOG_DEPTH];
@@ -67,7 +86,17 @@ void sos_i_error_reset(void);
 /* sos_event.c */
 sos_status_t sos_i_event_post(sos_task_id_t id, sos_events_t bits);
 
+/* sos_ring.c */
+sos_status_t sos_i_ring_check(const sos_cfg_root_t *root);
+void         sos_i_ring_reset(void);
+
+/* sos_supervise.c */
+void sos_i_supervise_reset(sos_tick_t now);
+void sos_i_supervise(sos_tick_t now);
+bool sos_i_step_overrun(sos_task_id_t id, sos_tick_t dt); /* true: treat as error */
+
 /* sos_sched.c */
 void sos_i_ready_set(sos_task_id_t id);             /* caller holds critical section */
+void sos_i_task_error(sos_task_id_t id, sos_status_t code, sos_tick_t now);
 
 #endif /* SOS_KERNEL_PRI_H */

@@ -108,7 +108,9 @@ static const sos_task_desc_t g_tasks[] =
 static const sos_cfg_root_t g_root =
 {
     SOS_ABI_VERSION, 0u /* hand-written */, 0u, g_tasks,
-    (uint8_t)(sizeof g_tasks / sizeof g_tasks[0]), NULL
+    (uint8_t)(sizeof g_tasks / sizeof g_tasks[0]),
+    NULL, 0u,                                    /* no ring buffers */
+    NULL                                         /* no hooks */
 };
 
 int main(void)

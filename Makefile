@@ -10,23 +10,21 @@ SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer -g
 include kernel.mk
 
 HOST_SRC := platform/host/host_platform.c
-TEST_SRC := test/test_main.c test/test_util.c test/test_unit.c test/test_sched.c test/test_error.c
+TEST_SRC := test/test_main.c test/test_util.c test/test_unit.c test/test_sched.c test/test_error.c \
+            test/test_ring.c test/test_supervise.c
 INC      := $(SOS_INC) -Iplatform/host
 
 WIDTHS := 16 32 64
 
-.PHONY: all test test-san example clean
-all: test example
+.PHONY: all test test-san test-thread test-tsan example clean
+all: test test-thread example
 
 # Kernel and host platform get the strict warning set; tests a relaxed one.
 define TEST_template
 $(BUILD)/test_$(1): $(SOS_SRC) $(HOST_SRC) $(TEST_SRC) $(wildcard kernel/inc/*.h kernel/src/*.h platform/*.h platform/host/*.h test/*.h)
 	@mkdir -p $(BUILD)/obj$(1)
-	$(CC) $(WARN) $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$(1) $(INC) -Itest -c kernel/src/sos_sched.c   -o $(BUILD)/obj$(1)/sos_sched.o
-	$(CC) $(WARN) $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$(1) $(INC) -Itest -c kernel/src/sos_time.c    -o $(BUILD)/obj$(1)/sos_time.o
-	$(CC) $(WARN) $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$(1) $(INC) -Itest -c kernel/src/sos_event.c   -o $(BUILD)/obj$(1)/sos_event.o
-	$(CC) $(WARN) $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$(1) $(INC) -Itest -c kernel/src/sos_error.c   -o $(BUILD)/obj$(1)/sos_error.o
-	$(CC) $(WARN) $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$(1) $(INC) -Itest -c kernel/src/sos_bitmap.c  -o $(BUILD)/obj$(1)/sos_bitmap.o
+	for f in $(SOS_SRC); do $(CC) $(WARN) $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$(1) $(INC) -Itest \
+	    -c $$$$f -o $(BUILD)/obj$(1)/$$$$(basename $$$$f .c).o || exit 1; done
 	$(CC) $(WARN) $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$(1) $(INC) -Itest -c $(HOST_SRC)              -o $(BUILD)/obj$(1)/host_platform.o
 	$(CC) -std=c99 -Wall -Wextra -Werror $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$(1) $(INC) -Itest \
 	    $(TEST_SRC) $(BUILD)/obj$(1)/*.o -o $$@
@@ -39,6 +37,22 @@ test: $(foreach w,$(WIDTHS),$(BUILD)/test_$(w))
 test-san:
 	$(MAKE) clean
 	$(MAKE) test EXTRA="$(SAN)"
+
+# Thread platform: real time, producer threads as asynchronous contexts.
+THREAD_INC := $(SOS_INC) -Iplatform/host_thread -Itest
+THREAD_SRC := platform/host_thread/thread_platform.c
+test-thread: $(BUILD)/test_thread
+	./$(BUILD)/test_thread
+$(BUILD)/test_thread: $(SOS_SRC) $(THREAD_SRC) test/test_thread.c $(wildcard kernel/inc/*.h kernel/src/*.h platform/*.h platform/host_thread/*.h)
+	@mkdir -p $(BUILD)/objthr
+	for f in $(SOS_SRC) $(THREAD_SRC); do $(CC) $(WARN) $(EXTRA) $(THREAD_INC) -c $$f \
+	    -o $(BUILD)/objthr/$$(basename $$f .c).o || exit 1; done
+	$(CC) -std=c11 -Wall -Wextra -Werror $(EXTRA) $(THREAD_INC) test/test_thread.c $(BUILD)/objthr/*.o -pthread -o $@
+
+test-tsan:
+	rm -rf $(BUILD)/objthr $(BUILD)/test_thread
+	$(MAKE) test-thread EXTRA="-fsanitize=thread -g -O1"
+	rm -rf $(BUILD)/objthr $(BUILD)/test_thread
 
 example: $(BUILD)/manual_cfg
 $(BUILD)/manual_cfg: examples/manual_cfg/main.c examples/manual_cfg/sos_cfg.h $(SOS_SRC) $(HOST_SRC)

@@ -7,5 +7,7 @@ SOS_SRC  := $(SOS_ROOT)/kernel/src/sos_sched.c \
             $(SOS_ROOT)/kernel/src/sos_time.c \
             $(SOS_ROOT)/kernel/src/sos_event.c \
             $(SOS_ROOT)/kernel/src/sos_error.c \
-            $(SOS_ROOT)/kernel/src/sos_bitmap.c
+            $(SOS_ROOT)/kernel/src/sos_bitmap.c \
+            $(SOS_ROOT)/kernel/src/sos_ring.c \
+            $(SOS_ROOT)/kernel/src/sos_supervise.c
 SOS_INC  := -I$(SOS_ROOT)/kernel/inc -I$(SOS_ROOT)/platform
