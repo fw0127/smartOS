@@ -1,6 +1,6 @@
 # smartOs — 最小调度核心(设计阶段)
 
-> 状态:**v0.2 已实现**:调度核心、环形缓冲、监控  ·  许可证:MPL-2.0
+> 状态:**v0.3 已实现**:调度核心、环形缓冲、监控、配置生成器  ·  许可证:MPL-2.0
 > 设计来源:对一个既有嵌入式固件执行模型的抽象提炼
 
 ## 一句话定位
@@ -15,6 +15,7 @@ make test        # 在 16/32/64 位计数宽度下运行全部主机测试
 make test-san    # 同上,开启 AddressSanitizer + UBSan
 make test-thread # 线程平台上的并发测试(真实时间,线程模拟中断)
 make test-tsan   # 同上,开启 ThreadSanitizer
+make test-gen    # 生成器单元测试 + 由描述文件生成的流水线示例端到端运行
 make example     # 构建手写配置示例,运行 ./build/manual_cfg
 ```
 

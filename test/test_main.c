@@ -7,7 +7,7 @@
     X(test_errlog_ring) \
     X(test_periodic_offset) X(test_periodic_offset_across_wrap) X(test_priority_order) \
     X(test_event_preempts_between_steps) X(test_event_during_own_run) X(test_event_mask) \
-    X(test_async_event_wakes_idle) \
+    X(test_async_event_wakes_idle) X(test_event_to_periodic_only) \
     X(test_again_yield) X(test_again_yield_alone_never_waits) X(test_again_yield_to_background) \
     X(test_background_fills_idle) X(test_alarm) X(test_missed_periods) \
     X(test_periodic_and_event) X(test_stop) X(test_stats_state) \

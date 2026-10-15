@@ -1,0 +1,79 @@
+# smartOs example: two-stage pipeline (docs/03 section 13).
+#
+#   "interrupt" --frames--> rx_ring --> ingress --requests--> req_ring --> worker
+#                                          ^                                  |
+#                                          +------------ RESP_READY ----------+
+#
+# Generate with:  python3 tools/sosgen examples/layered_pipeline/app.toml -o <dir>
+
+[kernel]
+time_unit_us        = 1
+errlog_depth        = 8
+health_min_interval = "10ms"
+
+[hooks]
+on_fatal         = "app_on_fatal"
+on_ring_overflow = "app_on_ring_overflow"
+
+[[task]]
+name        = "ingress"
+prio        = 0
+trigger     = ["periodic", "event"]
+period      = "1ms"                       # also retries when req_ring was full
+events      = ["INPUT", "RESP_READY"]
+budget      = "100us"                     # at most 4 frames per step
+on_error    = "restart"
+max_restart = 3
+init = "ingress_init"
+run  = "ingress_run"
+ctx  = "g_ingress"
+
+[[task]]
+name             = "worker"
+prio             = 1
+trigger          = ["event"]
+events           = ["REQ_READY"]
+budget           = "200us"
+min_interarrival = "1200us"               # one request per 3 frames at 400 us
+again_limit      = 2                      # let heartbeat and selfcheck through
+on_error         = "restart"
+max_restart      = 3
+run  = "worker_run"
+ctx  = "g_worker"
+
+[[task]]
+name         = "heartbeat"
+prio         = 2
+trigger      = ["periodic"]
+period       = "5ms"
+budget       = "20us"
+alive_window = "15ms"                     # overload detector: health stops if starved
+on_error     = "fatal"
+run  = "heartbeat_run"
+
+[[task]]
+name    = "selfcheck"
+trigger = ["background"]
+budget  = "60us"
+on_error = "ignore"
+run  = "selfcheck_run"
+ctx  = "g_selfcheck"
+
+[[ring]]
+name      = "rx_ring"
+elem_type = "app_frame_t"
+capacity  = 16
+producer  = "async"
+consumer  = "ingress"
+notify    = "INPUT"
+
+[[ring]]
+name      = "req_ring"
+elem_type = "app_request_t"
+capacity  = 4
+producer  = "ingress"
+consumer  = "worker"
+notify    = "REQ_READY"
+
+[app]
+headers = ["app.h"]

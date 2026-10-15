@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.3.0 — configuration generator (unreleased)
+
+- `tools/sosgen`: TOML description file -> `sos_cfg.h`, `sos_cfg_gen.h`,
+  `sos_cfg_gen.c` and a report (D4, D9). Sorts tasks by priority, assigns
+  ids/bits/ring handles, emits callback prototypes, digest and generator
+  version; deterministic output; generated files declare they are the
+  user's and not covered by the MPL-2.0.
+- Build-time checks 1-9 of docs/06, optional platform profile for range and
+  precision checks, non-preemptive response-time estimate.
+- `examples/layered_pipeline`: two-stage pipeline generated from app.toml,
+  run end to end on the virtual platform (`make test-gen`).
+- Kernel: events wake only EVENT-triggered tasks; other tasks receive the
+  bits with their next step.
+
 ## v0.2.0 — ring buffers and supervision (unreleased)
 
 - `sos_ring`: single-producer/single-consumer ring buffers, by value

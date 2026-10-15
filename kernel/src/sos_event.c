@@ -23,7 +23,10 @@ sos_status_t sos_i_event_post(sos_task_id_t id, sos_events_t bits)
     else
     {
         sos_k.tcb[id].events |= bits;
+        /* only EVENT-triggered tasks are woken; others get the bits with
+         * their next step */
         if ((id < sos_k.fg_count)
+            && ((sos_k.cfg->tasks[id].trigger & SOS_TRIG_EVENT) != 0u)
             && ((sos_k.tcb[id].events & sos_k.cfg->tasks[id].event_mask) != 0u))
         {
             sos_i_ready_set(id);

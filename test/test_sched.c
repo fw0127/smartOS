@@ -414,3 +414,21 @@ void test_stats_state(void)
     CHECK_EQ(st.state, SOS_STATE_READY);
     CHECK_EQ(sos_task_get_stats(7u, &st), SOS_E_PARAM);
 }
+
+/* A periodic-only task is not woken by events; the bits arrive with its
+ * next periodic step. */
+void test_event_to_periodic_only(void)
+{
+    reset_tasks(0u);
+    g_d[0] = tdesc("p", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0x1u, &g_t[0]);
+    setup(0u, 1u);
+
+    run_for(300u);                                      /* first step at 0 */
+    CHECK_EQ(sos_event_set(0u, 0x1u), SOS_OK);
+    run_for(500u);
+    CHECK_EQ(g_t[0].runs, 1u);                          /* not woken */
+    run_for(1000u);
+    CHECK_EQ(g_t[0].runs, 2u);
+    CHECK_EQ(g_t[0].last_ev, 0x1u);
+    CHECK_EQ(g_trace[1].at, 1000u);
+}
