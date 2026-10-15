@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /*
  * Concurrency tests on the host thread platform: a producer thread acts as an
  * asynchronous context (interrupt) while the scheduler runs on the main thread.

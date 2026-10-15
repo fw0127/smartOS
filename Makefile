@@ -16,8 +16,8 @@ INC      := $(SOS_INC) -Iplatform/host
 
 WIDTHS := 16 32 64
 
-.PHONY: all test test-san test-thread test-tsan test-gen example example-pipeline clean
-all: test test-thread test-gen example
+.PHONY: all test test-san test-thread test-tsan test-gen test-contract example example-pipeline clean
+all: test test-thread test-gen test-contract example
 
 # Kernel and host platform get the strict warning set; tests a relaxed one.
 define TEST_template
@@ -74,6 +74,17 @@ example-pipeline: $(PIPE_GEN)/sos_cfg_gen.c
 	$(CC) $(WARN) $(SOS_INC) -Iplatform/host -I$(PIPE_GEN) -I$(PIPE_DIR) $(SOS_SRC) $(HOST_SRC) \
 	    $(PIPE_GEN)/sos_cfg_gen.c $(PIPE_DIR)/app.c $(PIPE_DIR)/main.c -o $(BUILD)/pipeline
 	./$(BUILD)/pipeline
+
+# Platform contract conformance suite on both host platforms.
+CT_DIR := platform/contract_tests
+test-contract:
+	@mkdir -p $(BUILD)
+	for w in $(WIDTHS); do $(CC) $(WARN) $(EXTRA) -DSOS_PLATFORM_TICK_BITS=$$w -Iplatform -Iplatform/host -I$(CT_DIR) \
+	    $(CT_DIR)/sos_contract_test.c platform/host/host_platform.c platform/host/host_contract.c \
+	    -o $(BUILD)/contract_host_$$w && ./$(BUILD)/contract_host_$$w || exit 1; done
+	$(CC) $(WARN) $(EXTRA) -Iplatform -Iplatform/host_thread -I$(CT_DIR) $(CT_DIR)/sos_contract_test.c \
+	    $(THREAD_SRC) platform/host_thread/thread_contract.c -pthread -o $(BUILD)/contract_thread
+	./$(BUILD)/contract_thread
 
 clean:
 	rm -rf $(BUILD)

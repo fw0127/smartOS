@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        cc: [gcc, clang]
+        exclude:
+          - os: macos-latest
+            cc: gcc            # gcc is clang on macOS runners
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: tests (virtual time, threads, generator, contract) and examples
+        run: make all
+      - name: AddressSanitizer + UBSan
+        run: make test-san
+      - name: ThreadSanitizer
+        run: make test-tsan
+      - name: CMake
+        run: cmake -S . -B build/cmake && cmake --build build/cmake && ./build/cmake/manual_cfg

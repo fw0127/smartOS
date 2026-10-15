@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.4.0 — platform contract conformance suite (unreleased)
+
+- `platform/contract_tests`: platform-independent conformance checks of the
+  seven contract functions (time, critical section, wait, sticky notify,
+  health), driven by a small per-platform harness; harnesses for the
+  virtual-time and thread platforms. Mutation-checked: removing notify
+  stickiness or critical-section exclusion makes the suite fail.
+- CMake convenience target (`smartos_add_kernel`), GitHub Actions workflow
+  (Ubuntu gcc/clang, macOS clang; not yet run on Linux).
+- POSIX feature macro for the thread test sources (glibc portability).
+
 ## v0.3.0 — configuration generator (unreleased)
 
 - `tools/sosgen`: TOML description file -> `sos_cfg.h`, `sos_cfg_gen.h`,
