@@ -25,6 +25,8 @@ typedef struct
     uint16_t              again_cnt;
     uint16_t              miss_cnt;
     uint16_t              overrun_cnt;
+    uint16_t              job_steps;    /* steps of the current job so far */
+    uint16_t              max_job_steps;
     volatile sos_events_t events;
     sos_tick_t            period;       /* converted from the descriptor */
     sos_tick_t            offset;
@@ -64,7 +66,8 @@ typedef struct
     uint8_t               task_count;
     uint8_t               fg_count;
     uint8_t               bg_next;
-    sos_task_id_t         current;
+    sos_task_id_t         current;        /* task whose callback is running */
+    bool                  req_pending;    /* deferred stop/restart requests (D16) */
 #if SOS_CFG_SUPERVISE_ENABLE
     sos_tick_t            sup_interval;
     sos_tick_t            sup_next;       /* next supervision check */

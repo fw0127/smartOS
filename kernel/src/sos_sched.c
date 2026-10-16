@@ -74,29 +74,76 @@ static void l_hook_task_error(sos_task_id_t id, sos_status_t code)
     }
 }
 
-/* Put a task into its initial runtime state (events, alarm, release). */
-static void l_tcb_arm(sos_task_id_t id, sos_tick_t now)
+/* Run a lifecycle callback with the identity of the task it belongs to
+ * (D16): sos_task_self(), alarms and ring ownership checks inside init and
+ * done refer to that task, not to whichever task caused the call. */
+static sos_status_t l_call_init(sos_task_id_t id)
+{
+    const sos_task_desc_t *d = L_DESC(id);
+    sos_task_id_t saved = sos_k.current;
+    sos_status_t st = SOS_OK;
+
+    if (d->init != NULL)
+    {
+        sos_k.current = id;
+        st = d->init(d->ctx);
+        sos_k.current = saved;
+    }
+    return st;
+}
+
+static void l_call_done(sos_task_id_t id)
+{
+    const sos_task_desc_t *d = L_DESC(id);
+    sos_task_id_t saved = sos_k.current;
+
+    if (d->done != NULL)
+    {
+        sos_k.current = id;
+        d->done(d->ctx);
+        sos_k.current = saved;
+    }
+}
+
+/* Forget a task's runtime state before (re)initialising it. */
+static void l_tcb_clear(sos_task_id_t id)
 {
     sos_tcb_t *t = &sos_k.tcb[id];
 
+    sos_platform_critical_enter();
+    t->events = 0u;
+    if (l_is_fg(id))
+    {
+        sos_k.ready_bits &= ~L_BIT(id);
+    }
+    sos_platform_critical_exit();
     if (l_is_fg(id))
     {
         sos_k.deferred_bits &= ~L_BIT(id);
     }
     t->flags = 0u;
     t->again_cnt = 0u;
+    t->job_steps = 0u;
+}
+
+/* Make an initialised task active. Keeps what its init() set up: an alarm,
+ * and events posted to it meanwhile (which make it ready at once). */
+static void l_tcb_arm(sos_task_id_t id, sos_tick_t now)
+{
+    sos_tcb_t *t = &sos_k.tcb[id];
+
 #if SOS_CFG_SUPERVISE_ENABLE
     t->last_alive = now;
 #endif
     t->next_release = (sos_tick_t)(now + t->offset);
 
     sos_platform_critical_enter();          /* state and events are read by async posters */
-    t->events = 0u;
-    if (l_is_fg(id))
-    {
-        sos_k.ready_bits &= ~L_BIT(id);
-    }
     t->state = (uint8_t)SOS_STATE_WAITING;
+    if (l_is_fg(id) && ((L_DESC(id)->trigger & SOS_TRIG_EVENT) != 0u)
+        && ((t->events & L_DESC(id)->event_mask) != 0u))
+    {
+        sos_i_ready_set(id);
+    }
     sos_platform_critical_exit();
     if (l_is_periodic(id))
     {
@@ -124,10 +171,7 @@ static void l_stop(sos_task_id_t id)
         }
         t->flags = 0u;
         sos_i_ring_owner_reset(id);
-        if (L_DESC(id)->done != NULL)
-        {
-            L_DESC(id)->done(L_DESC(id)->ctx);
-        }
+        l_call_done(id);
     }
 }
 
@@ -149,7 +193,8 @@ static void l_start_task(sos_task_id_t id, bool policy_restart)
             }
             t->restart_cnt++;
         }
-        if ((d->init == NULL) || (d->init(d->ctx) == SOS_OK))
+        l_tcb_clear(id);
+        if (l_call_init(id) == SOS_OK)
         {
             l_tcb_arm(id, sos_platform_now());
             return;
@@ -179,14 +224,49 @@ static void l_start_task(sos_task_id_t id, bool policy_restart)
 
 static void l_restart(sos_task_id_t id, bool by_policy)
 {
-    const sos_task_desc_t *d = L_DESC(id);
-
     sos_i_ring_owner_reset(id);
-    if (d->done != NULL)
-    {
-        d->done(d->ctx);
-    }
+    l_call_done(id);
     l_start_task(id, by_policy);
+}
+
+/* Stop / restart requests made from one task's step for ANOTHER task are
+ * carried out here, after that step has returned (D16), so one task's step
+ * never contains another task's init or done. */
+static void l_maintenance(void)
+{
+    uint8_t i;
+
+    if (!sos_k.req_pending)
+    {
+        return;
+    }
+    sos_k.req_pending = false;
+    for (i = 0u; i < sos_k.task_count; i++)
+    {
+        sos_tcb_t *t = &sos_k.tcb[i];
+
+        if ((t->flags & SOS_F_STOP_REQ) != 0u)
+        {
+            t->flags &= (uint8_t)~SOS_F_STOP_REQ;
+            l_stop(i);
+        }
+        else if ((t->flags & SOS_F_RESTART_REQ) != 0u)
+        {
+            t->flags &= (uint8_t)~SOS_F_RESTART_REQ;
+            if (t->state == (uint8_t)SOS_STATE_STOPPED)
+            {
+                l_start_task(i, false);     /* done() already ran on stop */
+            }
+            else
+            {
+                l_restart(i, false);
+            }
+        }
+        else
+        {
+            /* nothing requested */
+        }
+    }
 }
 
 /* After a completed step: advance the periodic release if it was reached.
@@ -320,17 +400,32 @@ static void l_dispatch(sos_task_id_t id)
     {
         t->max_step = dt;
     }
+    if (t->job_steps != 0xFFFFu)
+    {
+        t->job_steps++;                     /* steps of the current job (AGAIN chain) */
+    }
+    if (t->job_steps > t->max_job_steps)
+    {
+        t->max_job_steps = t->job_steps;
+    }
+    if (r != SOS_RUN_AGAIN)
+    {
+        t->job_steps = 0u;
+    }
     overrun_error = sos_i_step_overrun(id, dt);
     l_yield_consumed(id);
 
     if ((t->flags & SOS_F_STOP_REQ) != 0u)
     {
         l_stop(id);
+        l_maintenance();
         return;
     }
     if ((t->flags & SOS_F_RESTART_REQ) != 0u)
     {
+        t->flags &= (uint8_t)~SOS_F_RESTART_REQ;
         l_restart(id, false);
+        l_maintenance();
         return;
     }
 
@@ -388,6 +483,7 @@ static void l_dispatch(sos_task_id_t id)
     {
         sos_i_task_error(id, SOS_E_OVERRUN, t1);
     }
+    l_maintenance();
 }
 
 /* A step of task id has run. Yielded tasks of higher priority than id (and
@@ -530,6 +626,8 @@ sos_status_t sos_init(const sos_cfg_root_t *root)
         t->overrun_cnt = 0u;
         t->events = 0u;
         t->max_step = 0u;
+        t->job_steps = 0u;
+        t->max_job_steps = 0u;
         t->period = sos_time_to_ticks(root->tasks[i].period);
         t->offset = sos_time_to_ticks(root->tasks[i].offset);
 #if SOS_CFG_SUPERVISE_ENABLE
@@ -543,10 +641,12 @@ sos_status_t sos_init(const sos_cfg_root_t *root)
     }
 
     sos_k.initialized = true;               /* events may be posted from init() */
+    sos_k.req_pending = false;
     for (i = 0u; i < sos_k.task_count; i++)
     {
         l_start_task(i, false);
     }
+    l_maintenance();                        /* stop/restart requested by an init() */
     return SOS_OK;
 }
 
@@ -704,13 +804,15 @@ sos_status_t sos_task_stop(sos_task_id_t id)
     {
         return SOS_E_STATE;
     }
-    if (id == sos_k.current)
+    if (sos_k.current == SOS_TASK_NONE)
     {
-        sos_k.tcb[id].flags |= SOS_F_STOP_REQ;      /* applied when run() returns */
+        l_stop(id);                                 /* main context: at once */
     }
     else
     {
-        l_stop(id);
+        sos_k.tcb[id].flags = (uint8_t)((sos_k.tcb[id].flags & (uint8_t)~SOS_F_RESTART_REQ)
+                                        | SOS_F_STOP_REQ);
+        sos_k.req_pending = true;                   /* after the current step (D16) */
     }
     return SOS_OK;
 }
@@ -725,9 +827,11 @@ sos_status_t sos_task_restart(sos_task_id_t id)
     {
         return SOS_E_STATE;
     }
-    if (id == sos_k.current)
+    if (sos_k.current != SOS_TASK_NONE)
     {
-        sos_k.tcb[id].flags |= SOS_F_RESTART_REQ;   /* applied when run() returns */
+        sos_k.tcb[id].flags = (uint8_t)((sos_k.tcb[id].flags & (uint8_t)~SOS_F_STOP_REQ)
+                                        | SOS_F_RESTART_REQ);
+        sos_k.req_pending = true;                   /* after the current step (D16) */
     }
     else if (sos_k.tcb[id].state == (uint8_t)SOS_STATE_STOPPED)
     {
@@ -770,5 +874,6 @@ sos_status_t sos_task_get_stats(sos_task_id_t id, sos_task_stats_t *out)
     out->miss_cnt = t->miss_cnt;
     out->overrun_cnt = t->overrun_cnt;
     out->max_step = t->max_step;
+    out->max_job_steps = t->max_job_steps;
     return SOS_OK;
 }

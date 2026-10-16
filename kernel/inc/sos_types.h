@@ -70,7 +70,7 @@
 /* ---- versions ------------------------------------------------------------ */
 #define SOS_VERSION_MAJOR   0u
 #define SOS_VERSION_MINOR   5u
-#define SOS_VERSION_PATCH   1u
+#define SOS_VERSION_PATCH   2u
 #define SOS_ABI_VERSION     3u      /* layout of sos_cfg_root_t and friends */
 
 /* ---- basic types --------------------------------------------------------- */
@@ -176,6 +176,7 @@ typedef struct
     uint8_t          restart_cnt;
     uint16_t         miss_cnt;
     uint16_t         overrun_cnt;
+    uint16_t         max_job_steps;   /* most steps one job took (compare with max_steps) */
     sos_tick_t       max_step;
 } sos_task_stats_t;
 

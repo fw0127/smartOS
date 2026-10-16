@@ -112,12 +112,12 @@ class Valid(unittest.TestCase):
         with open(PIPELINE, "rb") as f:
             cfg = sosgen.parse(tomllib.load(f), "app.toml")
         verdicts = dict(sosgen.schedulability(cfg))
-        # ingress: B = 200 (worker step), n = 1                      -> 300
-        self.assertEqual(verdicts["ingress"], "R = 300 <= D = 400: ok")
-        # worker: n = 3, again_limit 2 -> k = 2; 2*60 + 3*200 + ceil(R/400)*100
-        self.assertEqual(verdicts["worker"], "R = 1020 <= D = 1200: ok")
-        # heartbeat: 60 + 20 + ceil(R/400)*100 + ceil(R/1200)*3*200
-        self.assertEqual(verdicts["heartbeat"], "R = 980 <= D = 5000: ok")
+        # ingress: B = 200 (worker step), n = 1; D = min(1 ms, 400 us)
+        self.assertEqual(verdicts["ingress"], "PASS: R = 300 <= D = 400")
+        # worker: k = 2, n = 3: 2*60 + 3*200 + (ceil(R/1000) + ceil(R/400)) * 100
+        self.assertEqual(verdicts["worker"], "PASS: R = 1320 <= D = 3600")
+        # heartbeat: 60 + 20 + ingress releases * 100 + ceil(R/1200) * 3 * 200
+        self.assertEqual(verdicts["heartbeat"], "PASS: R = 1180 <= D = 5000")
 
 
 class Rejects(unittest.TestCase):
@@ -250,9 +250,9 @@ class PlatformChecks(unittest.TestCase):
             d["task"][2].update(budget="1ms")
         cfg = sosgen.parse(cfg_with(m))
         verdicts = dict(sosgen.schedulability(cfg))
-        self.assertIn("MISSES", verdicts["lo"])
+        self.assertTrue(verdicts["lo"].startswith("FAIL"))
         # non-preemptive: hi may wait for one whole 9 ms step of lo -> 9 + 2 > 3
-        self.assertTrue(verdicts["hi"].startswith("R = 11000 > D = 3000"))
+        self.assertTrue(verdicts["hi"].startswith("FAIL: R = 11000 > D = 3000"))
 
     def test_schedulability_uses_shorter_interval(self):
         # periodic 10 ms but events as often as every 1 ms: interference uses 1 ms
@@ -263,8 +263,8 @@ class PlatformChecks(unittest.TestCase):
             d["task"][2].update(budget="50us")
         cfg = sosgen.parse(cfg_with(m))
         lo = dict(sosgen.schedulability(cfg))["lo"]
-        # 50 (bg step) + 300 + ceil(R/1000)*100; D = 1000 shows T = 1 ms was used, not 10 ms
-        self.assertTrue(lo.startswith("R = 450 <= D = 1000"), lo)
+        # 50 (bg) + 300 + hi releases: ceil(R/1ms)*100; lo's D = min(10 ms, 1 ms)
+        self.assertTrue(lo.startswith("CONDITIONAL: R = 450 <= D = 1000"), lo)
 
     def test_schedulability_counts_steps_and_yields(self):
         def m(d):
@@ -275,9 +275,36 @@ class PlatformChecks(unittest.TestCase):
         cfg = sosgen.parse(cfg_with(m))
         v = dict(sosgen.schedulability(cfg))
         # hi: n = 20, k = 1 + 19 // 5 = 4 -> 4*200 + 20*100 = 2800
-        self.assertEqual(v["hi"], "R = 2800 <= D = 10000: ok")
+        self.assertEqual(v["hi"], "PASS: R = 2800 <= D = 10000")
         # lo sees hi's whole job (20 steps) as interference: 50 + 200 + 2000
-        self.assertEqual(v["lo"], "R = 2250 <= D = 10000: ok")
+        self.assertEqual(v["lo"], "PASS: R = 2250 <= D = 10000")
+
+    def test_schedulability_two_release_streams(self):
+        # H: periodic 10 ms AND events every >= 10 ms -> up to 2 releases in a short
+        # window (event just before and just after the periodic release)
+        doc = {"task": [
+            {"name": "h", "prio": 0, "trigger": ["periodic", "event"], "period": "10ms",
+             "events": ["E"], "min_interarrival": "10ms", "budget": "1ms", "max_steps": 1,
+             "run": "h_run"},
+            {"name": "l", "prio": 1, "trigger": ["periodic"], "period": "20ms",
+             "budget": "1ms", "max_steps": 1, "run": "l_run"}]}
+        v = dict(sosgen.schedulability(sosgen.parse(doc)))
+        self.assertEqual(v["l"], "PASS: R = 3000 <= D = 20000")   # min() model gave 2000
+
+    def test_schedulability_event_rate_required(self):
+        doc = {"task": [{"name": "e", "prio": 0, "trigger": ["periodic", "event"],
+                         "period": "10ms", "events": ["E"], "budget": "1ms", "run": "r"}]}
+        v = dict(sosgen.schedulability(sosgen.parse(doc)))
+        self.assertTrue(v["e"].startswith("N/A (an event-triggered task needs min_interarrival"))
+
+    def test_dispatch_overhead(self):
+        doc = {"kernel": {"dispatch_overhead": "10us"}, "task": [
+            {"name": "a", "prio": 0, "trigger": ["periodic"], "period": "1ms",
+             "budget": "100us", "max_steps": 2, "run": "a_run"},
+            {"name": "b", "trigger": ["background"], "budget": "40us", "run": "b_run"}]}
+        v = dict(sosgen.schedulability(sosgen.parse(doc)))
+        # B = 40 + 10, C = 100 + 10, n = 2 -> 50 + 220
+        self.assertEqual(v["a"], "PASS: R = 270 <= D = 1000")
 
     def test_schedulability_marks_assumptions(self):
         def m(d):
@@ -289,7 +316,7 @@ class PlatformChecks(unittest.TestCase):
 
     def test_schedulability_needs_budgets(self):
         cfg = sosgen.parse(copy.deepcopy(BASE))                 # no budgets at all
-        self.assertTrue(all(v.startswith("n/a") for _, v in sosgen.schedulability(cfg)))
+        self.assertTrue(all(v.startswith("N/A") for _, v in sosgen.schedulability(cfg)))
 
 
 class Cli(unittest.TestCase):

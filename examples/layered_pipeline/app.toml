@@ -38,6 +38,7 @@ events           = ["REQ_READY"]
 budget           = "200us"
 min_interarrival = "1200us"               # one request per 3 frames at 400 us
 max_steps        = 3                      # each request takes three steps
+deadline         = "3600us"               # req_ring holds 4 requests: 3 periods of slack
 again_limit      = 2                      # let heartbeat and selfcheck through
 on_error         = "restart"
 max_restart      = 3

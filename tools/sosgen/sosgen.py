@@ -24,7 +24,7 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-GEN_VERSION = (0, 5, 1)
+GEN_VERSION = (0, 5, 2)
 ABI_VERSION = 3
 FG_MAX = 32
 RING_MAX_CAP = 32768
@@ -45,7 +45,7 @@ HOOK_PROTOS = {
 }
 KERNEL_KEYS = {"time_unit_us", "errlog_depth", "overrun_is_error",
                "health_enable", "health_min_interval",
-               "ring_enable", "ring_zero_copy", "supervise_enable"}
+               "ring_enable", "ring_zero_copy", "supervise_enable", "dispatch_overhead"}
 TASK_KEYS = {"name", "prio", "trigger", "period", "offset", "events", "budget",
              "alive_window", "again_limit", "on_error", "max_restart",
              "min_interarrival", "max_steps", "deadline", "init", "run", "done", "ctx"}
@@ -109,6 +109,7 @@ class Config:
     ring_enable: bool
     ring_zero_copy: bool
     supervise_enable: bool
+    dispatch_overhead: int
     hooks: dict[str, str]
     tasks: list[Task]               # sorted: foreground by prio, then background
     rings: list[Ring]
@@ -256,9 +257,11 @@ def parse(doc: dict, source: str = "<config>") -> Config:
             if k.get(key):
                 c.fail("[kernel]", f"'{key}' requires supervise_enable = true")
 
+    overhead = _time(c, "[kernel]", "dispatch_overhead", k.get("dispatch_overhead", "0us"),
+                     unit_us)
     cfg = Config(source, unit_us, errlog, bool(k.get("overrun_is_error", False)),
                  bool(k.get("health_enable", True)), health_iv, ring_enable, ring_zc,
-                 supervise, hooks, ordered, rings, headers)
+                 supervise, overhead, hooks, ordered, rings, headers)
     cfg.digest = _digest(doc)
     return cfg
 
@@ -402,57 +405,84 @@ def check_platform(cfg: Config, p: Platform) -> None:
                                 f"resolution coarser than budget/10")
 
 
-def _rate(t: Task) -> int:
-    """Shortest interval between releases: a task triggered both periodically
-    and by events can be released at the smaller of the two."""
-    return min((x for x in (t.period, t.min_interarrival) if x), default=0)
+def _streams(t: Task) -> list[int] | None:
+    """Release streams of a task (D17): a periodic stream (period) and an
+    event stream (min_interarrival). They are independent, so their releases
+    ADD UP: in a window R a task is released at most sum(ceil(R / T)) times
+    -- taking only the smaller interval would undercount (an event just
+    before and another just after a periodic release). None = rate unknown."""
+    out = []
+    if "periodic" in t.triggers:
+        out.append(t.period)
+    if "event" in t.triggers:
+        if not t.min_interarrival:
+            return None                 # an event task without a bound on its arrivals
+        out.append(t.min_interarrival)
+    return out or None
+
+
+def _releases(streams: list[int], window: int) -> int:
+    return sum(math.ceil(window / T) for T in streams)
 
 
 def _steps(t: Task) -> int:
     return t.max_steps if t.max_steps else 1
 
 
+# verdict classes
+PASS, CONDITIONAL, FAIL, NA = "PASS", "CONDITIONAL", "FAIL", "N/A"
+
+
 def schedulability(cfg: Config) -> list[tuple[str, str]]:
     """Non-preemptive fixed-priority response time of one job (docs/03 section 12).
 
     A job is one release of a task and may take several steps (AGAIN):
-      C_i = budget (per step)        n_i = max_steps (steps per job, default 1)
-      T_i = min(period, min_interarrival)        D_i = deadline (default T_i)
+      C_i = budget + dispatch_overhead (per step)   n_i = max_steps (default 1)
+      releases_j(R) = sum over j's release streams of ceil(R / T)
+      D_i = deadline (default: the shortest release interval of i)
       B_i = longest step of any lower-priority or background task
-      k_i = 1 + (n_i - 1) // again_limit_i       (each yield admits one lower step)
-      R_i = k_i * B_i + n_i * C_i + sum_hp ceil(R_i / T_j) * n_j * C_j
-    Returns (task, verdict); n/a whenever an input is missing."""
+      k_i = 1 + (n_i - 1) // again_limit_i     (each yield admits one lower step)
+      R_i = k_i * B_i + n_i * C_i + sum_hp releases_j(R_i) * n_j * C_j
+    Verdicts: PASS (all inputs given, R <= D), CONDITIONAL (R <= D, but some
+    max_steps was assumed to be 1), FAIL (R > D), N/A (inputs missing)."""
+    ov = cfg.dispatch_overhead
     fg = [t for t in cfg.tasks if not t.background]
     rows = []
     for i, t in enumerate(fg):
-        T = _rate(t)
-        if not t.budget or not T:
-            rows.append((t.name, "n/a (needs budget and period or min_interarrival)"))
+        streams = _streams(t)
+        if not t.budget or streams is None:
+            why = ("an event-triggered task needs min_interarrival"
+                   if t.budget and "event" in t.triggers else "needs budget and a release rate")
+            rows.append((t.name, f"{NA} ({why})"))
             continue
         hp = fg[:i]
-        if any(not h.budget or not _rate(h) for h in hp):
-            rows.append((t.name, "n/a (a higher-priority task lacks budget or rate)"))
+        if any(not h.budget or _streams(h) is None for h in hp):
+            rows.append((t.name, f"{NA} (a higher-priority task lacks budget or release rate)"))
             continue
         lower = [x.budget for x in cfg.tasks[i + 1:]]
         if any(b == 0 for b in lower):
-            rows.append((t.name, "n/a (a lower-priority or background task lacks budget)"))
+            rows.append((t.name, f"{NA} (a lower-priority or background task lacks budget)"))
             continue
-        D = t.deadline or T
+        D = t.deadline or min(streams)
         n = _steps(t)
         k = 1 + ((n - 1) // t.again_limit if t.again_limit else 0)
-        B = max(lower, default=0)
-        R = k * B + n * t.budget
+        B = max(lower, default=0) + (ov if lower else 0)
+        C = t.budget + ov
+        R = k * B + n * C
         while True:
-            Rn = k * B + n * t.budget + sum(math.ceil(R / _rate(h)) * _steps(h) * h.budget
-                                            for h in hp)
+            Rn = k * B + n * C + sum(_releases(_streams(h), R) * _steps(h) * (h.budget + ov)
+                                     for h in hp)
             if Rn == R or Rn > 100 * D:
                 break
             R = Rn
         R = Rn
         assumed = [x.name for x in [t] + hp if not x.max_steps]
+        if R > D:
+            cls, rel = FAIL, ">"
+        else:
+            cls, rel = (CONDITIONAL if assumed else PASS), "<="
         note = f"  [assumes 1 step per job for: {', '.join(assumed)}]" if assumed else ""
-        verdict = (f"R = {R} <= D = {D}: ok" if R <= D else f"R = {R} > D = {D}: MISSES deadline")
-        rows.append((t.name, verdict + note))
+        rows.append((t.name, f"{cls}: R = {R} {rel} D = {D}{note}"))
     return rows
 
 
@@ -628,7 +658,14 @@ def render_report(cfg: Config, platform: Platform | None) -> str:
         for r in cfg.rings:
             lines.append(f"{r.rid:<3} {r.name:<20} {r.elem_type:<20} {r.capacity:<5} "
                          f"{r.producer} -> {r.consumer} ({r.notify or '-'})")
-    lines += ["", "schedulability (non-preemptive fixed priority, estimate):"]
+    lines += ["", "schedulability (non-preemptive fixed priority, design-time estimate):",
+              f"  per-step kernel overhead included: {cfg.dispatch_overhead or 0} "
+              f"(set [kernel] dispatch_overhead from a target measurement)",
+              "  NOT included: release scan and supervision passes, platform wait/wake-up",
+              "  latency, interrupt handlers, and anything outside the task steps.",
+              "  PASS = all inputs given and R <= D; CONDITIONAL = holds only under the noted",
+              "  assumptions; FAIL = R > D; N/A = inputs missing. Budgets are assumptions",
+              "  to be checked against target measurements, not proven WCETs."]
     for name, verdict in schedulability(cfg):
         lines.append(f"  {name:<20} {verdict}")
     if platform:

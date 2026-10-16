@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.5.2 — third review round
+
+- Fix (D16): `init` and `done` ran with the identity of whichever task
+  caused them (or none), so `sos_task_self()` was wrong there and an alarm
+  set in `init` while task A restarted task B landed on A. Lifecycle
+  callbacks now run as their own task. Stop/restart of another task
+  requested from task context is carried out after the current step, so one
+  task's step never contains another task's `init`/`done`.
+- Fix (D17): `sosgen` merged the periodic and event release streams with
+  min(), which undercounts (events just before and after a periodic
+  release). Streams now add up; an event task without `min_interarrival`
+  gives N/A. Verdicts PASS / CONDITIONAL / FAIL / N/A; optional
+  `[kernel] dispatch_overhead`; the report states what it does not include.
+- `max_job_steps` statistic to check the `max_steps` assumption on target.
+- Example: worker deadline from the request queue depth (3.6 ms); under the
+  stricter model its response bound is 1.32 ms, above the 1.2 ms interval.
+- Release tags v0.1.0 ... v0.5.2.
+
 ## v0.5.1 — second review round (unreleased)
 
 - Fix (D13): a yield was consumed by any dispatch, so a higher-priority task
