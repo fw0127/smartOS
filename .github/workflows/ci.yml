@@ -30,3 +30,16 @@ jobs:
         run: make test-tsan
       - name: CMake
         run: cmake -S . -B build/cmake && cmake --build build/cmake && ./build/cmake/manual_cfg
+
+  avr:
+    # Arduino Nano (ATmega328P) platform: firmware must build warning-free.
+    # Simulation/hardware results are recorded in platform/avr_nano/README.md.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install avr-gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc-avr avr-libc binutils-avr
+      - name: build contract and demo firmware
+        run: |
+          make -C platform/avr_nano build/contract.hex build/demo.hex
+          avr-size platform/avr_nano/build/contract.elf platform/avr_nano/build/demo.elf

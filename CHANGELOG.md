@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.0 — first real platform (in progress)
+
+- `platform/avr_nano`: Arduino Nano (ATmega328P, 16 MHz) bare-metal
+  adaptation. 32-bit tick from Timer1 + overflow counter (250 kHz),
+  SREG-saving nested critical section, IDLE sleep with OCR1A wake-up and
+  sticky notify, watchdog health signal, serial halt report. Target-side
+  contract harness with four AVR-specific checks, and a kernel demo
+  (button interrupt event, periodic LED and report, watchdog).
+  Verified in simavr; not yet on a physical board.
+- Fix: `sos_version()` shifted `0u << 16`, undefined with a 16-bit int (AVR).
+- CI: builds the AVR firmware with gcc-avr.
+
 ## v0.5.2 — third review round
 
 - Fix (D16): `init` and `done` ran with the identity of whichever task

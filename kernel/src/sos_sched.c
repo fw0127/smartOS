@@ -754,7 +754,9 @@ void sos_start(void)
 
 uint32_t sos_version(void)
 {
-    return (SOS_VERSION_MAJOR << 16) | (SOS_VERSION_MINOR << 8) | SOS_VERSION_PATCH;
+    /* widen first: with a 16-bit int (AVR) "0u << 16" exceeds the type width */
+    return ((uint32_t)SOS_VERSION_MAJOR << 16) | ((uint32_t)SOS_VERSION_MINOR << 8)
+           | (uint32_t)SOS_VERSION_PATCH;
 }
 
 sos_task_id_t sos_task_self(void)
