@@ -81,8 +81,32 @@ void test_ring_fifo_full_empty(void)
     CHECK_EQ(st.count, 0u);
     CHECK_EQ(st.high_water, 8u);
     CHECK_EQ(st.overflow_cnt, 1u);
+    CHECK_EQ(g_overflow_hook, 0);                     /* deferred to scheduler context (D15) */
+    (void)sos_poll(NULL);
     CHECK_EQ(g_overflow_hook, 1);
+    (void)sos_poll(NULL);
+    CHECK_EQ(g_overflow_hook, 1);                     /* once per overflow episode */
     CHECK_EQ(sos_ring_put(1u, &i), SOS_E_PARAM);       /* no such ring */
+}
+
+/* Several overflows before the scheduler runs give one hook call; the
+ * statistics keep the exact count. */
+void test_ring_overflow_hook_coalesced(void)
+{
+    uint32_t i;
+    sos_ring_stats_t st;
+
+    g_rd[0] = rdesc(g_store, sizeof(uint32_t), 8u, SOS_TASK_NONE, 0u);
+    CHECK_EQ(start(1u), SOS_OK);
+    for (i = 0u; i < 13u; i++)
+    {
+        (void)sos_ring_put(0u, &i);                   /* 8 fit, 5 overflow */
+    }
+    CHECK_EQ(g_overflow_hook, 0);
+    (void)sos_poll(NULL);
+    CHECK_EQ(g_overflow_hook, 1);
+    CHECK_EQ(sos_ring_get_stats(0u, &st), SOS_OK);
+    CHECK_EQ(st.overflow_cnt, 5u);
 }
 
 /* The 16-bit free-running indices wrap many times without losing order. */
@@ -334,11 +358,52 @@ void test_ring_owner_stop(void)
     CHECK_EQ(sos_event_set(0u, 0x1u), SOS_OK);
     run_for(100u);
     CHECK_EQ(g_own[0].dones, 1u);                     /* stopped */
+#if !SOS_CFG_RING_CHECK_OWNER
     {
         uint32_t v = 9u;                              /* e.g. a replacement producer */
         CHECK_EQ(sos_ring_put(0u, &v), SOS_OK);       /* E_STATE if the reservation leaked */
     }
     CHECK_EQ(sos_ring_count(0u), 1u);
+#else
+    {
+        uint32_t v = 9u;                              /* not the declared producer */
+        CHECK_EQ(sos_ring_put(0u, &v), SOS_E_STATE);
+    }
+#endif
+}
+#endif
+
+#if SOS_CFG_RING_CHECK_OWNER
+/* Debug ownership check: calls from the wrong side are rejected. */
+static void wrong_side(tt_t *self, sos_events_t ev)
+{
+    uint32_t v = 1u;
+    (void)ev;
+    (void)self;
+    CHECK_EQ(sos_ring_put(0u, &v), SOS_E_STATE);      /* producer is async, not this task */
+    CHECK(sos_ring_reserve(0u) == NULL);
+}
+
+void test_ring_owner_check(void)
+{
+    uint32_t v = 3u;
+
+    fresh(0u);
+    memset(g_own, 0, sizeof g_own);
+    g_od[0] = tdesc("other", 0u, SOS_TRIG_EVENT, 0u, 0u, 0x1u, &g_own[0]);
+    g_own[0].action = wrong_side;
+    g_od[1] = tdesc("cons", 1u, SOS_TRIG_EVENT, 0u, 0u, 0x1u, &g_own[1]);
+    g_rd[0] = rdesc(g_store, sizeof(uint32_t), 8u, 1u, 0u);    /* async -> cons */
+    g_root = troot(g_od, 2u);
+    g_root.rings = g_rd;
+    g_root.ring_count = 1u;
+    CHECK_EQ(sos_init(&g_root), SOS_OK);
+
+    CHECK_EQ(sos_ring_put(0u, &v), SOS_OK);           /* outside any task: async side ok */
+    CHECK_EQ(sos_ring_get(0u, &v), SOS_E_STATE);      /* not the consumer task */
+    CHECK_EQ(sos_event_set(0u, 0x1u), SOS_OK);
+    run_for(100u);
+    CHECK_EQ(g_own[0].runs, 1u);
 }
 #endif
 

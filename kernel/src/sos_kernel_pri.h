@@ -48,6 +48,7 @@ typedef struct
 #endif
     uint16_t          high_water;
     uint16_t          overflow_cnt;
+    bool              overflow_pending;   /* hook not yet called (D15) */
 } sos_ring_rt_t;
 
 typedef struct
@@ -71,6 +72,7 @@ typedef struct
     uint8_t               ring_count;
 #if SOS_CFG_RING_ENABLE
     sos_ring_rt_t         ring[SOS_CFG_MAX_RINGS];
+    volatile bool         ring_overflow_any;
 #endif
     /* error log */
     uint32_t              err_total;
@@ -96,6 +98,7 @@ sos_status_t sos_i_event_post(sos_task_id_t id, sos_events_t bits);
 sos_status_t sos_i_ring_check(const sos_cfg_root_t *root);
 void         sos_i_ring_reset(void);
 void         sos_i_ring_owner_reset(sos_task_id_t id);   /* abandon id's reserve/acquire */
+void         sos_i_ring_service(void);                   /* call deferred overflow hooks */
 
 /* sos_supervise.c */
 void sos_i_supervise_reset(sos_tick_t now);

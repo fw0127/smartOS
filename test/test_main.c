@@ -1,10 +1,10 @@
 #include "test_util.h"
 
 #define TESTS(X) \
-    X(test_time_reached_wraps) X(test_time_conversion) X(test_time_elapsed_across_wrap) \
+    X(test_time_reached_wraps) X(test_time_conversion) X(test_time_conversion_saturates) X(test_time_elapsed_across_wrap) \
     X(test_bitmap_lowest) \
     X(test_cfg_valid) X(test_cfg_rejects) X(test_cfg_time_range) X(test_cfg_fg_limit) X(test_background_high_id) \
-    X(test_errlog_ring) \
+    X(test_errlog_ring) X(test_init_checked_digest) \
     X(test_periodic_offset) X(test_periodic_offset_across_wrap) X(test_priority_order) \
     X(test_event_preempts_between_steps) X(test_event_during_own_run) X(test_event_mask) \
     X(test_async_event_wakes_idle) X(test_event_to_periodic_only) \
@@ -13,15 +13,23 @@
     X(test_periodic_and_event) X(test_stop) X(test_stats_state) \
     X(test_policy_restart_limit) X(test_policy_restart_counter_resets) X(test_policy_stop) \
     X(test_policy_ignore_no_hot_loop) X(test_policy_fatal) X(test_unknown_result) \
-    X(test_init_failure_policies) X(test_restart_request) \
+    X(test_init_failure_policies) X(test_restart_request) X(test_yield_survives_higher_priority) \
+    X(test_random_scheduler) \
     RING_TESTS(X) ZC_TESTS(X) SUPERVISE_TESTS(X)
 
 /* module-dependent groups (D12) */
 #if SOS_CFG_RING_ENABLE
 #define RING_TESTS(X) X(test_ring_fifo_full_empty) X(test_ring_index_wrap) \
-    X(test_ring_notifies_consumer) X(test_ring_cfg_rejects)
+    X(test_ring_notifies_consumer) X(test_ring_cfg_rejects) X(test_ring_overflow_hook_coalesced) \
+    X(test_random_ring) \
+    OWNER_TESTS(X)
 #else
 #define RING_TESTS(X) X(test_rings_disabled)
+#endif
+#if SOS_CFG_RING_CHECK_OWNER
+#define OWNER_TESTS(X) X(test_ring_owner_check)
+#else
+#define OWNER_TESTS(X)
 #endif
 #if SOS_CFG_RING_ZERO_COPY
 #define ZC_TESTS(X) X(test_ring_zero_copy) X(test_ring_owner_restart) X(test_ring_owner_stop)

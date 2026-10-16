@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.1 — second review round (unreleased)
+
+- Fix (D13): a yield was consumed by any dispatch, so a higher-priority task
+  that happened to be ready at the yield took the lower task's opportunity.
+  Now only a lower foreground step or the idle slot consumes it.
+- Fix: `sosgen` response-time estimate used the period even when events
+  could arrive more often, and counted one step per release. Now per job:
+  T = min(period, min_interarrival), new `max_steps` and `deadline`, extra
+  blocking per yield; missing inputs give n/a; assumptions are printed.
+- D14: `sos_init_checked()` and generated `SOS_CFG_INIT()` reject a header
+  and table from different generator runs; the generator version is now
+  documented as informative only.
+- D15: `on_ring_overflow` runs in scheduler context (coalesced) instead of
+  possibly inside an interrupt.
+- Fix: `sos_ticks_to_time` could wrap in a 64-bit multiplication before
+  saturating.
+- `SOS_CFG_RING_CHECK_OWNER` debug check; API call-context matrix (docs/04).
+- Randomised state-machine tests for scheduler and rings with invariants;
+  `docs/07` maps each guarantee to implementation, tests and target checks.
+
 ## v0.5.0 — review fixes (unreleased)
 
 - Platform contract: the critical section must also be callable from an

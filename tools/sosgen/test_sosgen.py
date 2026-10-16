@@ -71,6 +71,8 @@ class Valid(unittest.TestCase):
         self.assertIn("#define SOS_CFG_RING_ZERO_COPY      1", k)
         self.assertIn("#define SOS_CFG_SUPERVISE_ENABLE    1", k)
         self.assertIn(f".abi_version = {sosgen.ABI_VERSION}u", c)
+        self.assertIn(f".digest = 0x{cfg.digest:08X}u", c)                  # literal (D14)
+        self.assertIn("#define SOS_CFG_INIT() sos_init_checked(&sos_cfg_root, SOS_CFG_DIGEST)", h)
         self.assertIn("#define SOS_CFG_MAX_TASKS           3u", k)
 
     def test_no_rings(self):
@@ -110,8 +112,12 @@ class Valid(unittest.TestCase):
         with open(PIPELINE, "rb") as f:
             cfg = sosgen.parse(tomllib.load(f), "app.toml")
         verdicts = dict(sosgen.schedulability(cfg))
-        self.assertTrue(verdicts["ingress"].startswith("R = 300 <= T = 1000"))
-        self.assertTrue(verdicts["worker"].startswith("R = 360 <= T = 1200"))
+        # ingress: B = 200 (worker step), n = 1                      -> 300
+        self.assertEqual(verdicts["ingress"], "R = 300 <= D = 400: ok")
+        # worker: n = 3, again_limit 2 -> k = 2; 2*60 + 3*200 + ceil(R/400)*100
+        self.assertEqual(verdicts["worker"], "R = 1020 <= D = 1200: ok")
+        # heartbeat: 60 + 20 + ceil(R/400)*100 + ceil(R/1200)*3*200
+        self.assertEqual(verdicts["heartbeat"], "R = 980 <= D = 5000: ok")
 
 
 class Rejects(unittest.TestCase):
@@ -246,7 +252,40 @@ class PlatformChecks(unittest.TestCase):
         verdicts = dict(sosgen.schedulability(cfg))
         self.assertIn("MISSES", verdicts["lo"])
         # non-preemptive: hi may wait for one whole 9 ms step of lo -> 9 + 2 > 3
-        self.assertTrue(verdicts["hi"].startswith("R = 11000 > T = 3000"))
+        self.assertTrue(verdicts["hi"].startswith("R = 11000 > D = 3000"))
+
+    def test_schedulability_uses_shorter_interval(self):
+        # periodic 10 ms but events as often as every 1 ms: interference uses 1 ms
+        def m(d):
+            d["task"][1].update(budget="100us", min_interarrival="1ms")
+            d["task"][0].update(trigger=["periodic", "event"], events=["X"], budget="300us",
+                                min_interarrival="1ms", max_steps=1)
+            d["task"][2].update(budget="50us")
+        cfg = sosgen.parse(cfg_with(m))
+        lo = dict(sosgen.schedulability(cfg))["lo"]
+        # 50 (bg step) + 300 + ceil(R/1000)*100; D = 1000 shows T = 1 ms was used, not 10 ms
+        self.assertTrue(lo.startswith("R = 450 <= D = 1000"), lo)
+
+    def test_schedulability_counts_steps_and_yields(self):
+        def m(d):
+            d["task"][1].update(budget="100us", min_interarrival="10ms", max_steps=20,
+                                again_limit=5)
+            d["task"][0].update(budget="200us", max_steps=1)
+            d["task"][2].update(budget="50us")
+        cfg = sosgen.parse(cfg_with(m))
+        v = dict(sosgen.schedulability(cfg))
+        # hi: n = 20, k = 1 + 19 // 5 = 4 -> 4*200 + 20*100 = 2800
+        self.assertEqual(v["hi"], "R = 2800 <= D = 10000: ok")
+        # lo sees hi's whole job (20 steps) as interference: 50 + 200 + 2000
+        self.assertEqual(v["lo"], "R = 2250 <= D = 10000: ok")
+
+    def test_schedulability_marks_assumptions(self):
+        def m(d):
+            d["task"][1].update(budget="100us", min_interarrival="1ms")
+            d["task"][0].update(budget="200us")
+            d["task"][2].update(budget="50us")
+        v = dict(sosgen.schedulability(sosgen.parse(cfg_with(m))))
+        self.assertIn("assumes 1 step per job for: lo, hi", v["lo"])
 
     def test_schedulability_needs_budgets(self):
         cfg = sosgen.parse(copy.deepcopy(BASE))                 # no budgets at all

@@ -25,7 +25,7 @@ int main(void)
     sos_task_id_t id;
 
     host_reset(0u);
-    if (sos_init(&sos_cfg_root) != SOS_OK)
+    if (SOS_CFG_INIT() != SOS_OK)                /* sos_init + header/table check */
     {
         printf("sos_init failed\n");
         return 1;

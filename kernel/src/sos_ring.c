@@ -38,13 +38,23 @@ static void l_copy(uint8_t *dst, const uint8_t *src, uint16_t n)
     }
 }
 
-static void l_overflow(sos_ring_t r)
+#if SOS_CFG_RING_CHECK_OWNER
+/* Debug check: the producer side may only be used by the producer task, or
+ * outside any task when the producer is an asynchronous context; the
+ * consumer side only by the consumer task (when one is declared). */
+static bool l_producer_ok(sos_ring_t r)
 {
-    if ((sos_k.hooks != NULL) && (sos_k.hooks->on_ring_overflow != NULL))
-    {
-        sos_k.hooks->on_ring_overflow(r);
-    }
+    return sos_k.current == L_DESC(r)->producer;
 }
+
+static bool l_consumer_ok(sos_ring_t r)
+{
+    return (L_DESC(r)->consumer == SOS_TASK_NONE) || (sos_k.current == L_DESC(r)->consumer);
+}
+#else
+#define l_producer_ok(r) true
+#define l_consumer_ok(r) true
+#endif
 
 /* Producer side: find the free slot at head, or count an overflow. */
 static uint8_t *l_claim(sos_ring_t r)
@@ -56,15 +66,19 @@ static uint8_t *l_claim(sos_ring_t r)
     sos_platform_critical_enter();
     head = rt->head;
     full = ((uint16_t)(head - rt->tail) >= L_DESC(r)->capacity);
-    if (full && (rt->overflow_cnt != 0xFFFFu))
+    if (full)
     {
-        rt->overflow_cnt++;
+        if (rt->overflow_cnt != 0xFFFFu)
+        {
+            rt->overflow_cnt++;
+        }
+        rt->overflow_pending = true;        /* hook runs later in scheduler context */
+        sos_k.ring_overflow_any = true;
     }
     sos_platform_critical_exit();
 
     if (full)
     {
-        l_overflow(r);
         return NULL;
     }
     return l_slot(r, head);
@@ -151,6 +165,8 @@ void sos_i_ring_reset(void)
 {
     uint8_t i;
 
+    sos_k.ring_overflow_any = false;
+
     for (i = 0u; i < SOS_CFG_MAX_RINGS; i++)
     {
         sos_k.ring[i].head = 0u;
@@ -161,6 +177,39 @@ void sos_i_ring_reset(void)
 #endif
         sos_k.ring[i].high_water = 0u;
         sos_k.ring[i].overflow_cnt = 0u;
+        sos_k.ring[i].overflow_pending = false;
+    }
+}
+
+/* Call on_ring_overflow for every ring that overflowed since the last call:
+ * once per ring, from scheduler context, however many overflows occurred
+ * (the exact number is in the statistics). */
+void sos_i_ring_service(void)
+{
+    uint8_t i;
+    bool any;
+
+    sos_platform_critical_enter();          /* written by producers, possibly async */
+    any = sos_k.ring_overflow_any;
+    sos_k.ring_overflow_any = false;
+    sos_platform_critical_exit();
+    if (!any)
+    {
+        return;
+    }
+
+    for (i = 0u; i < sos_k.ring_count; i++)
+    {
+        bool pending;
+
+        sos_platform_critical_enter();
+        pending = L_RT(i)->overflow_pending;
+        L_RT(i)->overflow_pending = false;
+        sos_platform_critical_exit();
+        if (pending && (sos_k.hooks != NULL) && (sos_k.hooks->on_ring_overflow != NULL))
+        {
+            sos_k.hooks->on_ring_overflow(i);
+        }
     }
 }
 
@@ -196,6 +245,10 @@ sos_status_t sos_ring_put(sos_ring_t r, const void *elem)
     {
         return SOS_E_PARAM;
     }
+    if (!l_producer_ok(r))
+    {
+        return SOS_E_STATE;
+    }
 #if SOS_CFG_RING_ZERO_COPY
     if (L_RT(r)->reserved)
     {
@@ -217,7 +270,7 @@ void *sos_ring_reserve(sos_ring_t r)
 {
     uint8_t *slot;
 
-    if (!l_valid(r))
+    if (!l_valid(r) || !l_producer_ok(r))
     {
         return NULL;
     }
@@ -239,7 +292,7 @@ sos_status_t sos_ring_commit(sos_ring_t r)
     {
         return SOS_E_PARAM;
     }
-    if (!L_RT(r)->reserved)
+    if (!L_RT(r)->reserved || !l_producer_ok(r))
     {
         return SOS_E_STATE;
     }
@@ -256,6 +309,10 @@ sos_status_t sos_ring_get(sos_ring_t r, void *out)
     if (!l_valid(r) || (out == NULL))
     {
         return SOS_E_PARAM;
+    }
+    if (!l_consumer_ok(r))
+    {
+        return SOS_E_STATE;
     }
 #if SOS_CFG_RING_ZERO_COPY
     if (L_RT(r)->acquired)
@@ -281,6 +338,10 @@ sos_status_t sos_ring_peek(sos_ring_t r, void *out)
     {
         return SOS_E_PARAM;
     }
+    if (!l_consumer_ok(r))
+    {
+        return SOS_E_STATE;
+    }
     slot = l_front(r);
     if (slot == NULL)
     {
@@ -295,7 +356,7 @@ const void *sos_ring_acquire(sos_ring_t r)
 {
     const uint8_t *slot;
 
-    if (!l_valid(r))
+    if (!l_valid(r) || !l_consumer_ok(r))
     {
         return NULL;
     }
@@ -313,7 +374,7 @@ sos_status_t sos_ring_release(sos_ring_t r)
     {
         return SOS_E_PARAM;
     }
-    if (!L_RT(r)->acquired)
+    if (!L_RT(r)->acquired || !l_consumer_ok(r))
     {
         return SOS_E_STATE;
     }
@@ -365,6 +426,10 @@ void sos_i_ring_reset(void)
 void sos_i_ring_owner_reset(sos_task_id_t id)
 {
     (void)id;
+}
+
+void sos_i_ring_service(void)
+{
 }
 
 #endif

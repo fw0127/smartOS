@@ -11,7 +11,7 @@ include kernel.mk
 
 HOST_SRC := platform/host/host_platform.c
 TEST_SRC := test/test_main.c test/test_util.c test/test_unit.c test/test_sched.c test/test_error.c \
-            test/test_ring.c test/test_supervise.c
+            test/test_ring.c test/test_supervise.c test/test_random.c
 INC      := $(SOS_INC) -Iplatform/host
 
 WIDTHS := 16 32 64
@@ -36,7 +36,8 @@ $(foreach w,$(WIDTHS),$(eval $(call TEST_template,$(w))))
 VARIANTS := nozc:-DSOS_CFG_RING_ZERO_COPY=0 \
             noring:-DSOS_CFG_RING_ENABLE=0 \
             nosup:-DSOS_CFG_SUPERVISE_ENABLE=0 \
-            minimal:-DSOS_CFG_RING_ENABLE=0~-DSOS_CFG_SUPERVISE_ENABLE=0
+            minimal:-DSOS_CFG_RING_ENABLE=0~-DSOS_CFG_SUPERVISE_ENABLE=0 \
+            owner:-DSOS_CFG_RING_CHECK_OWNER=1
 define VARIANT_template
 $(BUILD)/test_$(1): $(SOS_SRC) $(HOST_SRC) $(TEST_SRC) $(wildcard kernel/inc/*.h kernel/src/*.h platform/*.h platform/host/*.h test/*.h)
 	@mkdir -p $(BUILD)/obj_$(1)

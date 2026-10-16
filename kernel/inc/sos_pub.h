@@ -10,6 +10,10 @@
 
 /* ---- lifecycle ----------------------------------------------------------- */
 sos_status_t      sos_init(const sos_cfg_root_t *root);
+/* sos_init, but first require root->digest == expected (D14). Generated
+ * configurations call it through SOS_CFG_INIT() so that a header and a
+ * table from different generator runs are rejected. */
+sos_status_t      sos_init_checked(const sos_cfg_root_t *root, uint32_t expected_digest);
 void              sos_start(void);                        /* does not return */
 sos_poll_result_t sos_poll(sos_tick_t *next_deadline);    /* one iteration, never waits */
 void              sos_fatal(sos_status_t code);           /* does not return */

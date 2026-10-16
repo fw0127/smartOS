@@ -432,3 +432,49 @@ void test_event_to_periodic_only(void)
     CHECK_EQ(g_t[0].last_ev, 0x1u);
     CHECK_EQ(g_trace[1].at, 1000u);
 }
+
+/* D13: A yields while a higher-priority H is ready. H runs first (strict
+ * priority), but that does not consume A's yield: the opportunity still goes
+ * to the lower-priority B. */
+static void a_wakes_h_on_yield(tt_t *self, sos_events_t ev)
+{
+    (void)ev;
+    if (self->runs == 2u)
+    {
+        CHECK_EQ(sos_event_set(0u, 0x1u), SOS_OK);    /* H ready exactly at A's yield */
+    }
+}
+
+void test_yield_survives_higher_priority(void)
+{
+    unsigned i;
+    int b_after_h = -1;
+
+    reset_tasks(0u);
+    g_d[0] = tdesc("H", 0u, SOS_TRIG_EVENT, 0u, 0u, 0x1u, &g_t[0]);
+    g_d[1] = tdesc("A", 1u, SOS_TRIG_EVENT, 0u, 0u, 0x1u, &g_t[1]);
+    g_d[1].again_limit = 2u;
+    g_d[2] = tdesc("B", 2u, SOS_TRIG_EVENT, 0u, 0u, 0x1u, &g_t[2]);
+    g_t[1].dflt = SOS_RUN_AGAIN;
+    g_t[1].cost = 100u;
+    g_t[1].action = a_wakes_h_on_yield;
+    g_t[2].dflt = SOS_RUN_AGAIN;
+    g_t[2].cost = 100u;
+    setup(0u, 3u);
+
+    CHECK_EQ(sos_event_set(1u, 0x1u), SOS_OK);
+    CHECK_EQ(sos_event_set(2u, 0x1u), SOS_OK);
+    run_for(450u);                                      /* A A H B ... */
+    for (i = 0u; (i + 1u) < g_ntrace; i++)
+    {
+        if (g_trace[i].task == 0u)
+        {
+            b_after_h = g_trace[i + 1u].task;
+        }
+    }
+    CHECK_EQ(g_trace[0].task, 1u);
+    CHECK_EQ(g_trace[1].task, 1u);
+    CHECK_EQ(g_trace[2].task, 0u);                      /* H first: strict priority */
+    CHECK_EQ(b_after_h, 2);                             /* then B, not A again */
+}
+

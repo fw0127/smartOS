@@ -39,6 +39,8 @@ static bool l_is_ready(sos_task_id_t id)
     return r;
 }
 
+static void l_yield_consumed(sos_task_id_t id);
+
 static bool l_is_periodic(sos_task_id_t id)
 {
     return (L_DESC(id)->trigger & SOS_TRIG_PERIODIC) != 0u;
@@ -319,7 +321,7 @@ static void l_dispatch(sos_task_id_t id)
         t->max_step = dt;
     }
     overrun_error = sos_i_step_overrun(id, dt);
-    sos_k.deferred_bits = 0u;               /* the yielded opportunity was given */
+    l_yield_consumed(id);
 
     if ((t->flags & SOS_F_STOP_REQ) != 0u)
     {
@@ -385,6 +387,22 @@ static void l_dispatch(sos_task_id_t id)
     if (overrun_error && (t->state == (uint8_t)SOS_STATE_WAITING))
     {
         sos_i_task_error(id, SOS_E_OVERRUN, t1);
+    }
+}
+
+/* A step of task id has run. Yielded tasks of higher priority than id (and
+ * id itself) have now given their opportunity to a lower task; a yielded
+ * task of LOWER priority than id has not -- a higher-priority task merely
+ * ran in between -- and stays yielded (D13). A background step serves all. */
+static void l_yield_consumed(sos_task_id_t id)
+{
+    if (!l_is_fg(id) || (id >= 31u))
+    {
+        sos_k.deferred_bits = 0u;
+    }
+    else
+    {
+        sos_k.deferred_bits &= ~(((uint32_t)1u << (id + 1u)) - 1u);
     }
 }
 
@@ -532,6 +550,18 @@ sos_status_t sos_init(const sos_cfg_root_t *root)
     return SOS_OK;
 }
 
+sos_status_t sos_init_checked(const sos_cfg_root_t *root, uint32_t expected_digest)
+{
+    if ((root != NULL) && (root->digest != expected_digest))
+    {
+        sos_k.initialized = false;
+        sos_i_error_reset();
+        sos_i_error_log(SOS_TASK_NONE, SOS_E_CFG);
+        return SOS_E_CFG;               /* header and tables from different runs */
+    }
+    return sos_init(root);
+}
+
 sos_poll_result_t sos_poll(sos_tick_t *next_deadline)
 {
     sos_tick_t now;
@@ -546,6 +576,7 @@ sos_poll_result_t sos_poll(sos_tick_t *next_deadline)
     now = sos_platform_now();
     l_time_release(now);
     sos_i_supervise(now);
+    sos_i_ring_service();                   /* deferred overflow hooks (D15) */
 
     sos_platform_critical_enter();
     cand = sos_k.ready_bits & ~sos_k.deferred_bits;

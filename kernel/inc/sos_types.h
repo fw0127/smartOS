@@ -35,6 +35,9 @@
 #ifndef SOS_CFG_RING_ZERO_COPY
 #define SOS_CFG_RING_ZERO_COPY      SOS_CFG_RING_ENABLE  /* reserve/commit, acquire/release */
 #endif
+#ifndef SOS_CFG_RING_CHECK_OWNER
+#define SOS_CFG_RING_CHECK_OWNER    0           /* debug: reject calls from the wrong side */
+#endif
 #ifndef SOS_CFG_SUPERVISE_ENABLE
 #define SOS_CFG_SUPERVISE_ENABLE    1           /* budgets, alive windows, health signal */
 #endif
@@ -67,7 +70,7 @@
 /* ---- versions ------------------------------------------------------------ */
 #define SOS_VERSION_MAJOR   0u
 #define SOS_VERSION_MINOR   5u
-#define SOS_VERSION_PATCH   0u
+#define SOS_VERSION_PATCH   1u
 #define SOS_ABI_VERSION     3u      /* layout of sos_cfg_root_t and friends */
 
 /* ---- basic types --------------------------------------------------------- */

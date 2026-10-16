@@ -24,7 +24,7 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-GEN_VERSION = (0, 5, 0)
+GEN_VERSION = (0, 5, 1)
 ABI_VERSION = 3
 FG_MAX = 32
 RING_MAX_CAP = 32768
@@ -48,7 +48,7 @@ KERNEL_KEYS = {"time_unit_us", "errlog_depth", "overrun_is_error",
                "ring_enable", "ring_zero_copy", "supervise_enable"}
 TASK_KEYS = {"name", "prio", "trigger", "period", "offset", "events", "budget",
              "alive_window", "again_limit", "on_error", "max_restart",
-             "min_interarrival", "init", "run", "done", "ctx"}
+             "min_interarrival", "max_steps", "deadline", "init", "run", "done", "ctx"}
 RING_KEYS = {"name", "elem_type", "capacity", "producer", "consumer", "notify"}
 TOP_KEYS = {"kernel", "hooks", "task", "ring", "app"}
 
@@ -70,6 +70,8 @@ class Task:
     on_error: str = "fatal"
     max_restart: int = 0
     min_interarrival: int = 0
+    max_steps: int = 0                  # 0 = not given (analysis assumes 1)
+    deadline: int = 0                   # 0 = equal to the release interval
     events: list[str] = field(default_factory=list)
     init: str | None = None
     run: str = ""
@@ -281,7 +283,8 @@ def _parse_task(c: _Ctx, i: int, t: dict, unit_us: int) -> Task:
     background = trig == ["background"]
 
     if background:
-        for key in ("prio", "period", "offset", "events", "alive_window", "again_limit"):
+        for key in ("prio", "period", "offset", "events", "alive_window", "again_limit",
+                    "min_interarrival", "max_steps", "deadline"):
             if key in t:
                 c.fail(where, f"'{key}' is not allowed for a background task")
         prio = None
@@ -291,9 +294,13 @@ def _parse_task(c: _Ctx, i: int, t: dict, unit_us: int) -> Task:
         prio = _uint(c, where, "prio", t["prio"], 255)
 
     task = Task(name=name, prio=prio, triggers=trig)
-    for key in ("period", "offset", "budget", "alive_window", "min_interarrival"):
+    for key in ("period", "offset", "budget", "alive_window", "min_interarrival", "deadline"):
         if key in t:
             setattr(task, key, _time(c, where, key, t[key], unit_us))
+    if "max_steps" in t:
+        task.max_steps = _uint(c, where, "max_steps", t["max_steps"], 0xFFFF)
+        if task.max_steps == 0:
+            c.fail(where, "'max_steps' must be >= 1")
     task.again_limit = _uint(c, where, "again_limit", t.get("again_limit", 0), 0xFFFF)
     task.max_restart = _uint(c, where, "max_restart", t.get("max_restart", 0), 255)
     pol = t.get("on_error", "fatal")
@@ -395,36 +402,57 @@ def check_platform(cfg: Config, p: Platform) -> None:
                                 f"resolution coarser than budget/10")
 
 
+def _rate(t: Task) -> int:
+    """Shortest interval between releases: a task triggered both periodically
+    and by events can be released at the smaller of the two."""
+    return min((x for x in (t.period, t.min_interarrival) if x), default=0)
+
+
+def _steps(t: Task) -> int:
+    return t.max_steps if t.max_steps else 1
+
+
 def schedulability(cfg: Config) -> list[tuple[str, str]]:
-    """Non-preemptive fixed-priority response time (docs/03 section 12).
-    C = budget, T = period (or min_interarrival). Returns (task, verdict)."""
+    """Non-preemptive fixed-priority response time of one job (docs/03 section 12).
+
+    A job is one release of a task and may take several steps (AGAIN):
+      C_i = budget (per step)        n_i = max_steps (steps per job, default 1)
+      T_i = min(period, min_interarrival)        D_i = deadline (default T_i)
+      B_i = longest step of any lower-priority or background task
+      k_i = 1 + (n_i - 1) // again_limit_i       (each yield admits one lower step)
+      R_i = k_i * B_i + n_i * C_i + sum_hp ceil(R_i / T_j) * n_j * C_j
+    Returns (task, verdict); n/a whenever an input is missing."""
     fg = [t for t in cfg.tasks if not t.background]
     rows = []
     for i, t in enumerate(fg):
-        T = t.period or t.min_interarrival
+        T = _rate(t)
         if not t.budget or not T:
             rows.append((t.name, "n/a (needs budget and period or min_interarrival)"))
             continue
         hp = fg[:i]
-        if any(not h.budget or not (h.period or h.min_interarrival) for h in hp):
+        if any(not h.budget or not _rate(h) for h in hp):
             rows.append((t.name, "n/a (a higher-priority task lacks budget or rate)"))
             continue
         lower = [x.budget for x in cfg.tasks[i + 1:]]
         if any(b == 0 for b in lower):
             rows.append((t.name, "n/a (a lower-priority or background task lacks budget)"))
             continue
+        D = t.deadline or T
+        n = _steps(t)
+        k = 1 + ((n - 1) // t.again_limit if t.again_limit else 0)
         B = max(lower, default=0)
-        R = B + t.budget
-        for _ in range(1000):
-            Rn = B + t.budget + sum(math.ceil(R / (h.period or h.min_interarrival)) * h.budget
-                                    for h in hp)
-            if Rn == R or Rn > 100 * T:
+        R = k * B + n * t.budget
+        while True:
+            Rn = k * B + n * t.budget + sum(math.ceil(R / _rate(h)) * _steps(h) * h.budget
+                                            for h in hp)
+            if Rn == R or Rn > 100 * D:
                 break
             R = Rn
         R = Rn
-        verdict = "ok" if R <= T else "MISSES deadline"
-        rows.append((t.name, f"R = {R} <= T = {T}: {verdict}" if R <= T
-                     else f"R = {R} > T = {T}: {verdict}"))
+        assumed = [x.name for x in [t] + hp if not x.max_steps]
+        note = f"  [assumes 1 step per job for: {', '.join(assumed)}]" if assumed else ""
+        verdict = (f"R = {R} <= D = {D}: ok" if R <= D else f"R = {R} > D = {D}: MISSES deadline")
+        rows.append((t.name, verdict + note))
     return rows
 
 
@@ -482,6 +510,8 @@ def render_gen_h(cfg: Config) -> str:
         for r in cfg.rings:
             out.append(f"#define SOS_RING_{r.name.upper():<20} ((sos_ring_t){r.rid}u)")
     out += ["", "extern const sos_cfg_root_t sos_cfg_root;", "",
+            "/* initialise with the header/table pairing check (D14) */",
+            "#define SOS_CFG_INIT() sos_init_checked(&sos_cfg_root, SOS_CFG_DIGEST)", "",
             "/* callbacks referenced by the configuration */"]
     protos = []
     for t in cfg.tasks:
@@ -571,7 +601,7 @@ def render_gen_c(cfg: Config) -> str:
         "{",
         f"    .abi_version = {ABI_VERSION}u,",
         "    .gen_version = SOS_CFG_GEN_VERSION,",
-        "    .digest = SOS_CFG_DIGEST,",
+        f"    .digest = 0x{cfg.digest:08X}u,       /* literal: checked against the header */",
         "    .tasks = l_tasks,",
         f"    .task_count = {len(cfg.tasks)}u,",
         f"    .rings = {'l_rings' if cfg.rings else 'NULL'},",

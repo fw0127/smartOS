@@ -47,10 +47,15 @@ sos_time_t sos_ticks_to_time(sos_tick_t k)
     /* split to avoid overflow with 64-bit ticks */
     uint64_t whole = (uint64_t)k / (uint64_t)(SOS_PLATFORM_TICKS_PER_SEC);
     uint64_t rest  = (uint64_t)k % (uint64_t)(SOS_PLATFORM_TICKS_PER_SEC);
-    uint64_t v     = whole * (uint64_t)(SOS_TIME_UNITS_PER_SEC)
-                     + (rest * (uint64_t)(SOS_TIME_UNITS_PER_SEC))
-                       / (uint64_t)(SOS_PLATFORM_TICKS_PER_SEC);
+    uint64_t v;
 
+    /* saturate before multiplying: whole * units could wrap 64 bits */
+    if (whole > (0xFFFFFFFFu / (uint64_t)(SOS_TIME_UNITS_PER_SEC)))
+    {
+        return (sos_time_t)0xFFFFFFFFu;
+    }
+    v = whole * (uint64_t)(SOS_TIME_UNITS_PER_SEC)
+        + (rest * (uint64_t)(SOS_TIME_UNITS_PER_SEC)) / (uint64_t)(SOS_PLATFORM_TICKS_PER_SEC);
     return (v > 0xFFFFFFFFu) ? (sos_time_t)0xFFFFFFFFu : (sos_time_t)v;
 }
 

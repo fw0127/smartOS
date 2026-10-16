@@ -26,6 +26,19 @@ void test_time_conversion(void)
     CHECK_EQ(sos_ticks_to_time(2500u), 2500u);
 }
 
+/* ticks -> time saturates instead of wrapping, also for the largest tick */
+void test_time_conversion_saturates(void)
+{
+    sos_tick_t max = (sos_tick_t)~(sos_tick_t)0u;
+    sos_time_t v = sos_ticks_to_time(max);
+#if SOS_PLATFORM_TICK_BITS == 64
+    CHECK_EQ(v, 0xFFFFFFFFu);
+#else
+    CHECK_EQ(v, (sos_time_t)max);                       /* 1 tick = 1 unit on the host */
+#endif
+    CHECK_EQ(sos_time_to_ticks(0xFFFFFFFFu) >= 0xFFFFu, 1);
+}
+
 void test_time_elapsed_across_wrap(void)
 {
     sos_tick_t start;
@@ -281,4 +294,20 @@ void test_supervise_disabled(void)
     CHECK_EQ(host_wait_calls(), 19u);                 /* only between the 20 releases: no supervision wake-ups */
 }
 #endif
+
+/* D14: a generated header and table from different runs are rejected. */
+void test_init_checked_digest(void)
+{
+    sos_task_desc_t d[1];
+    static sos_cfg_root_t root;
+
+    fresh(0u);
+    memset(g_c, 0, sizeof g_c);
+    d[0] = tdesc("t", 0u, SOS_TRIG_EVENT, 0u, 0u, 1u, &g_c[0]);
+    root = troot(d, 1u);
+    root.digest = 0x12345678u;
+    CHECK_EQ(sos_init_checked(&root, 0x12345678u), SOS_OK);
+    CHECK_EQ(sos_init_checked(&root, 0x87654321u), SOS_E_CFG);
+    CHECK_EQ(sos_poll(NULL), SOS_POLL_NOT_INIT);
+}
 
