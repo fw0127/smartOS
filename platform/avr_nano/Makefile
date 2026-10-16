@@ -3,6 +3,7 @@
 #   make                 build contract.hex and demo.hex, print sizes
 #   make flash-contract  upload the contract suite, then watch the serial port
 #   make flash-demo      upload the kernel demo
+#   make flash-kpdlcd    upload the keypad + LCD1602 demo (keypad_lcd/)
 #   make monitor         serial monitor (screen), 115200
 #   make sim-contract    run in the simavr simulator instead (brew install simavr)
 #
@@ -33,8 +34,8 @@ LDFLAGS := -mmcu=$(MCU) -Wl,--gc-sections
 
 BUILD := build
 
-all: $(BUILD)/contract.hex $(BUILD)/demo.hex
-	@$(SIZE) -C --mcu=$(MCU) $(BUILD)/contract.elf $(BUILD)/demo.elf
+all: $(BUILD)/contract.hex $(BUILD)/demo.hex $(BUILD)/kpdlcd.hex
+	@$(SIZE) -C --mcu=$(MCU) $(BUILD)/contract.elf $(BUILD)/demo.elf $(BUILD)/kpdlcd.elf
 
 HDRS := $(wildcard *.h) $(wildcard $(SOS_ROOT)/kernel/inc/*.h) $(wildcard $(SOS_ROOT)/kernel/src/*.h) \
         $(SOS_ROOT)/platform/sos_platform.h $(SOS_ROOT)/platform/contract_tests/sos_contract_test.h
@@ -44,6 +45,11 @@ $(BUILD)/contract.elf: avr_contract.c avr_platform.c $(SOS_ROOT)/platform/contra
 
 $(BUILD)/demo.elf: avr_demo.c avr_platform.c $(SOS_SRC) $(HDRS) | $(BUILD)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(filter %.c,$^)
+
+KPD := keypad_lcd
+$(BUILD)/kpdlcd.elf: $(KPD)/main.c $(KPD)/keypad.c $(KPD)/lcd1602.c $(KPD)/twi.c avr_platform.c $(SOS_SRC) \
+                     $(HDRS) $(wildcard $(KPD)/*.h) | $(BUILD)
+	$(CC) $(CFLAGS) -I$(KPD) $(LDFLAGS) -o $@ $(filter %.c,$^)
 
 $(BUILD)/%.hex: $(BUILD)/%.elf
 	$(OBJCOPY) -O ihex -R .eeprom $< $@

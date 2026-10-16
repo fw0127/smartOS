@@ -11,8 +11,9 @@
  *   report  (prio 2) periodic 1 s: uptime, idle wake-ups, presses, errors
  *
  * The watchdog (2 s) is served by the kernel's health signal, so a hung
- * scheduler resets the board. Wire a push button (or the kit's KY-004
- * button module, signal pin) between D2 and GND; the internal pull-up is on.
+ * scheduler resets the board. Wire a push button between D2 and GND; the
+ * internal pull-up is on. A KY-004 module needs all three pins (S to D2,
+ * middle to 5V, - to GND): its on-board resistor may be a pull-down.
  * Serial: 115200 8N1.
  */
 #include <avr/interrupt.h>

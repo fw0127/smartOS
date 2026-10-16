@@ -8,7 +8,8 @@
   sticky notify, watchdog health signal, serial halt report. Target-side
   contract harness with four AVR-specific checks, and a kernel demo
   (button interrupt event, periodic LED and report, watchdog).
-  Verified in simavr; not yet on a physical board.
+  Verified in simavr and on a physical board (contract PASS; demo LED,
+  serial report, button interrupt and watchdog; long run without reset).
 - Fix: `sos_version()` shifted `0u << 16`, undefined with a 16-bit int (AVR).
 - CI: builds the AVR firmware with gcc-avr.
 
