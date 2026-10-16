@@ -199,7 +199,8 @@ static void l_advance_release(sos_task_id_t id, sos_tick_t now)
         t->next_release = (sos_tick_t)(t->next_release + (sos_tick_t)((k + 1u) * t->period));
         if (k != 0u)
         {
-            uint32_t m = (uint32_t)t->miss_cnt + (uint32_t)((k > 0xFFFFu) ? 0xFFFFu : k);
+            /* widen first: no comparison on sos_tick_t, whose width varies */
+            uint64_t m = (uint64_t)t->miss_cnt + (uint64_t)k;
             t->miss_cnt = (uint16_t)((m > 0xFFFFu) ? 0xFFFFu : m);
         }
     }

@@ -4,7 +4,7 @@
 CC      ?= cc
 BUILD   := build
 WARN    := -std=c99 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion \
-           -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Werror
+           -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wtype-limits -Werror
 SAN     := -fsanitize=address,undefined -fno-omit-frame-pointer -g
 
 include kernel.mk

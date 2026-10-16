@@ -33,10 +33,12 @@ sos_tick_t sos_time_to_ticks(sos_time_t t)
     {
         v = 1u;                         /* a non-zero interval never collapses to 0 */
     }
+#if SOS_PLATFORM_TICK_BITS < 64
     if (v > (uint64_t)L_TICK_MAX)
     {
         v = (uint64_t)L_TICK_MAX;       /* saturate; sos_init rejects it as out of range */
     }
+#endif
     return (sos_tick_t)v;
 }
 
