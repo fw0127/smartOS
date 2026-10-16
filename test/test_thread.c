@@ -59,7 +59,9 @@ static sos_run_result_t consumer_run(void *ctx, sos_events_t ev)
     if (g_mode == 3)
     {
         uint64_t p = atomic_load(&g_post_at);
-        uint64_t lat = (p != 0u) ? ((uint64_t)sos_time_now() - p) : 0u;
+        uint64_t now = (uint64_t)sos_time_now();
+        /* p may exceed now by 1: the producer stores (time | 1) to keep it non-zero */
+        uint64_t lat = ((p != 0u) && (now > p)) ? (now - p) : 0u;
         if (lat > g_max_latency) { g_max_latency = lat; }
         atomic_store(&g_post_at, 0u);            /* lets the producer post the next one */
         g_wakes++;
