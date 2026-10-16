@@ -318,3 +318,60 @@ void test_max_job_steps(void)
     CHECK_EQ(sos_task_get_stats(0u, &st), SOS_OK);
     CHECK_EQ(st.max_job_steps, 5u);
 }
+
+/* F4: events posted before a task has started -- by its own init (e.g. an
+ * interrupt it enables firing at once) or by an earlier task's init -- are
+ * kept and delivered when the task starts, as on a restart. */
+static sos_status_t post_early_init(void *ctx)
+{
+    tt_t *t = (tt_t *)ctx;
+    t->inits++;
+    if (sos_task_self() == 0u)
+    {
+        CHECK_EQ(sos_event_set_async(0u, 0x1u), SOS_OK);   /* to itself, mid-init */
+        CHECK_EQ(sos_event_set(1u, 0x2u), SOS_OK);         /* to B, not started yet */
+    }
+    return SOS_OK;
+}
+
+void test_events_before_first_start(void)
+{
+    reset();
+    g_d[0] = tdesc("A", 0u, SOS_TRIG_EVENT, 0u, 0u, 0x1u, &g_t[0]);
+    g_d[0].init = post_early_init;
+    g_d[1] = tdesc("B", 1u, SOS_TRIG_EVENT, 0u, 0u, 0x2u, &g_t[1]);
+    g_d[1].init = post_early_init;
+    CHECK_EQ(start(2u), SOS_OK);
+    run_for(100u);
+    CHECK_EQ(g_t[0].runs, 1u);
+    CHECK_EQ(g_t[0].last_ev, 0x1u);
+    CHECK_EQ(g_t[1].runs, 1u);
+    CHECK_EQ(g_t[1].last_ev, 0x2u);
+    CHECK_EQ(sos_error_count(), 0u);
+}
+
+/* F1: the division-free fast path and the missed-period path give the same
+ * release grid. */
+void test_release_grid_fast_and_slow_path(void)
+{
+    static const uint64_t costs[] = { 100u, 2500u, 100u };
+    unsigned i;
+    sos_task_stats_t st;
+
+    reset();
+    g_d[0] = tdesc("p", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+    g_d[0].on_error = SOS_ON_ERR_IGNORE;
+    CHECK_EQ(start(1u), SOS_OK);
+    for (i = 0u; i < 3u; i++)
+    {
+        g_t[0].cost = costs[i];
+        run_for(1000u);
+    }
+    run_for(3000u);
+    CHECK_EQ(sos_task_get_stats(0u, &st), SOS_OK);
+    CHECK_EQ(st.miss_cnt, 2u);                          /* the 2.5 ms step skipped 2 */
+    for (i = 0u; i < g_ntrace; i++)
+    {
+        CHECK_EQ(g_trace[i].at % 1000u, 0u);            /* always on the 1 ms grid */
+    }
+}

@@ -15,6 +15,7 @@
     X(test_policy_ignore_no_hot_loop) X(test_policy_fatal) X(test_unknown_result) \
     X(test_init_failure_policies) X(test_restart_request) X(test_yield_survives_higher_priority) \
     X(test_lifecycle_identity_and_deferral) X(test_max_job_steps) \
+    X(test_events_before_first_start) X(test_release_grid_fast_and_slow_path) \
     X(test_random_scheduler) \
     RING_TESTS(X) ZC_TESTS(X) SUPERVISE_TESTS(X)
 

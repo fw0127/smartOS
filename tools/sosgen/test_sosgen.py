@@ -297,6 +297,17 @@ class PlatformChecks(unittest.TestCase):
         v = dict(sosgen.schedulability(sosgen.parse(doc)))
         self.assertTrue(v["e"].startswith("N/A (an event-triggered task needs min_interarrival"))
 
+    def test_divergence_reported(self):
+        # F5: higher-priority load >= 1 -> no finite response time; say so
+        doc = {"task": [
+            {"name": "h", "prio": 0, "trigger": ["periodic"], "period": "1ms",
+             "budget": "600us", "max_steps": 2, "run": "h_run"},
+            {"name": "l", "prio": 1, "trigger": ["periodic"], "period": "10ms",
+             "budget": "100us", "max_steps": 1, "run": "l_run"}]}
+        v = dict(sosgen.schedulability(sosgen.parse(doc)))
+        self.assertEqual(v["l"], "FAIL: diverges (higher-priority load U = 1.20 >= 1)")
+        self.assertTrue(v["h"].startswith("FAIL: R = 1300 > D = 1000"))   # 100 (l) + 2*600
+
     def test_dispatch_overhead(self):
         doc = {"kernel": {"dispatch_overhead": "10us"}, "task": [
             {"name": "a", "prio": 0, "trigger": ["periodic"], "period": "1ms",

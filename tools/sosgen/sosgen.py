@@ -24,7 +24,7 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-GEN_VERSION = (0, 5, 2)
+GEN_VERSION = (0, 6, 0)
 ABI_VERSION = 3
 FG_MAX = 32
 RING_MAX_CAP = 32768
@@ -465,6 +465,12 @@ def schedulability(cfg: Config) -> list[tuple[str, str]]:
             continue
         D = t.deadline or min(streams)
         n = _steps(t)
+        # long-run load of the higher-priority tasks: if it reaches 1 they can
+        # keep the processor busy forever and R has no finite bound (F5)
+        u_hp = sum(_steps(h) * (h.budget + ov) / T for h in hp for T in _streams(h))
+        if u_hp >= 1.0:
+            rows.append((t.name, f"{FAIL}: diverges (higher-priority load U = {u_hp:.2f} >= 1)"))
+            continue
         k = 1 + ((n - 1) // t.again_limit if t.again_limit else 0)
         B = max(lower, default=0) + (ov if lower else 0)
         C = t.budget + ov
@@ -476,6 +482,10 @@ def schedulability(cfg: Config) -> list[tuple[str, str]]:
                 break
             R = Rn
         R = Rn
+        if R > 100 * D:
+            rows.append((t.name, f"{FAIL}: R > 100 * D = {100 * D} (search stopped; "
+                                 f"higher-priority load U = {u_hp:.2f})"))
+            continue
         assumed = [x.name for x in [t] + hp if not x.max_steps]
         if R > D:
             cls, rel = FAIL, ">"

@@ -16,9 +16,15 @@ sos_status_t sos_i_event_post(sos_task_id_t id, sos_events_t bits)
     }
 
     sos_platform_critical_enter();
-    if (sos_k.tcb[id].state != (uint8_t)SOS_STATE_WAITING)
+    if (sos_k.tcb[id].state == (uint8_t)SOS_STATE_DORMANT)
     {
-        st = SOS_E_STATE;
+        /* during sos_init, before this task's init has completed: keep the
+         * bits; they are delivered when the task starts (F4) */
+        sos_k.tcb[id].events |= bits;
+    }
+    else if (sos_k.tcb[id].state != (uint8_t)SOS_STATE_WAITING)
+    {
+        st = SOS_E_STATE;                   /* stopped */
     }
     else
     {

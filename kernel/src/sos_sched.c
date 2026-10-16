@@ -193,7 +193,9 @@ static void l_start_task(sos_task_id_t id, bool policy_restart)
             }
             t->restart_cnt++;
         }
-        l_tcb_clear(id);
+        t->flags = 0u;                      /* events are kept: they may come from init */
+        t->again_cnt = 0u;
+        t->job_steps = 0u;
         if (l_call_init(id) == SOS_OK)
         {
             l_tcb_arm(id, sos_platform_now());
@@ -210,6 +212,7 @@ static void l_start_task(sos_task_id_t id, bool policy_restart)
             case SOS_ON_ERR_STOP:
                 sos_platform_critical_enter();
                 t->state = (uint8_t)SOS_STATE_STOPPED;
+                t->events = 0u;
                 sos_platform_critical_exit();
                 return;
             case SOS_ON_ERR_IGNORE:
@@ -226,6 +229,7 @@ static void l_restart(sos_task_id_t id, bool by_policy)
 {
     sos_i_ring_owner_reset(id);
     l_call_done(id);
+    l_tcb_clear(id);                        /* a restart forgets the old events */
     l_start_task(id, by_policy);
 }
 
@@ -255,6 +259,7 @@ static void l_maintenance(void)
             t->flags &= (uint8_t)~SOS_F_RESTART_REQ;
             if (t->state == (uint8_t)SOS_STATE_STOPPED)
             {
+                l_tcb_clear(i);
                 l_start_task(i, false);     /* done() already ran on stop */
             }
             else
@@ -281,13 +286,22 @@ static void l_advance_release(sos_task_id_t id, sos_tick_t now)
     }
     if (sos_i_reached(now, t->next_release))
     {
-        sos_tick_t k = (sos_tick_t)((sos_tick_t)(now - t->next_release) / t->period);
-        t->next_release = (sos_tick_t)(t->next_release + (sos_tick_t)((k + 1u) * t->period));
-        if (k != 0u)
+        sos_tick_t late = (sos_tick_t)(now - t->next_release);
+
+        if (late < t->period)
         {
+            /* usual case, no period missed: no division (expensive on 8-bit MCUs) */
+            t->next_release = (sos_tick_t)(t->next_release + t->period);
+        }
+        else
+        {
+            sos_tick_t k = (sos_tick_t)(late / t->period);
+            t->next_release = (sos_tick_t)(t->next_release + (sos_tick_t)((k + 1u) * t->period));
             /* widen first: no comparison on sos_tick_t, whose width varies */
-            uint64_t m = (uint64_t)t->miss_cnt + (uint64_t)k;
-            t->miss_cnt = (uint16_t)((m > 0xFFFFu) ? 0xFFFFu : m);
+            {
+                uint64_t m = (uint64_t)t->miss_cnt + (uint64_t)k;
+                t->miss_cnt = (uint16_t)((m > 0xFFFFu) ? 0xFFFFu : m);
+            }
         }
     }
     l_due_update(now, t->next_release);
@@ -837,6 +851,7 @@ sos_status_t sos_task_restart(sos_task_id_t id)
     }
     else if (sos_k.tcb[id].state == (uint8_t)SOS_STATE_STOPPED)
     {
+        l_tcb_clear(id);
         l_start_task(id, false);                    /* done() already ran on stop */
     }
     else

@@ -11,6 +11,17 @@
   Verified in simavr and on a physical board (contract PASS; demo LED,
   serial report, button interrupt and watchdog; long run without reset).
 - Fix: `sos_version()` shifted `0u << 16`, undefined with a 16-bit int (AVR).
+- Target test work order executed by a separate test project (simulator,
+  report in docs/): wait/notify race, high-rate rings, sizes per module
+  combination, execution overhead, fault recovery, soak across a tick wrap.
+- Fix (F1): every completed periodic step did a 32-bit division, about
+  35 us of a 148 us step on the AVR; now only when a period was missed.
+- Fix (F4): events posted to a task before its first init completed were
+  rejected, unlike on a restart; they are now kept and delivered on start.
+- Fix (F5): `sosgen` printed a truncated iteration value when the
+  higher-priority load reached 1; it now reports divergence and the load.
+- Docs: Nano overhead table, recommended `dispatch_overhead`, capacity
+  (~6-7 kHz single-element interrupts), Optiboot and simavr caveats.
 - CI: builds the AVR firmware with gcc-avr.
 
 ## v0.5.2 — third review round
