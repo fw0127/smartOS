@@ -3,6 +3,8 @@
 #include <string.h>
 #include "test_util.h"
 
+#if SOS_CFG_SUPERVISE_ENABLE
+
 static tt_t g_t[3];
 static sos_task_desc_t g_d[3];
 static sos_cfg_root_t g_root;
@@ -156,3 +158,5 @@ void test_alive_stop(void)
     run_for(30000u);
     CHECK(host_health_calls() >= h1 + 3u);
 }
+
+#endif /* SOS_CFG_SUPERVISE_ENABLE */

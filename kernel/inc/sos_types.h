@@ -27,6 +27,17 @@
 #ifndef SOS_CFG_MAX_RINGS
 #define SOS_CFG_MAX_RINGS           8u
 #endif
+
+/* optional modules (D12): 1 = compiled in */
+#ifndef SOS_CFG_RING_ENABLE
+#define SOS_CFG_RING_ENABLE         1           /* ring buffers */
+#endif
+#ifndef SOS_CFG_RING_ZERO_COPY
+#define SOS_CFG_RING_ZERO_COPY      SOS_CFG_RING_ENABLE  /* reserve/commit, acquire/release */
+#endif
+#ifndef SOS_CFG_SUPERVISE_ENABLE
+#define SOS_CFG_SUPERVISE_ENABLE    1           /* budgets, alive windows, health signal */
+#endif
 #ifndef SOS_CFG_OVERRUN_IS_ERROR
 #define SOS_CFG_OVERRUN_IS_ERROR    0
 #endif
@@ -49,12 +60,15 @@
 #if SOS_CFG_HEALTH_MIN_INTERVAL < 1
 #error "SOS_CFG_HEALTH_MIN_INTERVAL must be >= 1"
 #endif
+#if SOS_CFG_RING_ZERO_COPY && !SOS_CFG_RING_ENABLE
+#error "SOS_CFG_RING_ZERO_COPY requires SOS_CFG_RING_ENABLE"
+#endif
 
 /* ---- versions ------------------------------------------------------------ */
 #define SOS_VERSION_MAJOR   0u
-#define SOS_VERSION_MINOR   2u
+#define SOS_VERSION_MINOR   5u
 #define SOS_VERSION_PATCH   0u
-#define SOS_ABI_VERSION     2u      /* layout of sos_cfg_root_t and friends */
+#define SOS_ABI_VERSION     3u      /* layout of sos_cfg_root_t and friends */
 
 /* ---- basic types --------------------------------------------------------- */
 typedef uint32_t sos_time_t;        /* configuration time, SOS_TIME_UNITS_PER_SEC */
@@ -124,16 +138,20 @@ typedef struct
     void (*on_ring_overflow)(uint8_t ring);
 } sos_hooks_t;
 
-/* Ring buffer: one producer (task or asynchronous context), one consumer task.
- * Storage is elem_size * capacity bytes, capacity a power of two. */
+/* Ring buffer: one producer execution context (a task, or one asynchronous
+ * context such as a single interrupt), one consumer task.
+ * Storage is elem_size * capacity bytes, capacity a power of two.
+ * producer / consumer name the owning tasks: when an owner is stopped or
+ * restarted, its unfinished reserve / acquire is abandoned (D11). */
 typedef struct
 {
     const char   *name;
     void         *storage;
     uint16_t      elem_size;
     uint16_t      capacity;
-    sos_task_id_t consumer;       /* task to notify, SOS_TASK_NONE = none */
-    sos_events_t  notify;         /* event set on the consumer per publish, 0 = none */
+    sos_task_id_t producer;       /* producer task, SOS_TASK_NONE = asynchronous context */
+    sos_task_id_t consumer;       /* consumer task, SOS_TASK_NONE = not declared */
+    sos_events_t  notify;         /* set on the consumer per publish, 0 = none */
 } sos_ring_desc_t;
 
 typedef struct

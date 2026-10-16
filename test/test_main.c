@@ -14,10 +14,27 @@
     X(test_policy_restart_limit) X(test_policy_restart_counter_resets) X(test_policy_stop) \
     X(test_policy_ignore_no_hot_loop) X(test_policy_fatal) X(test_unknown_result) \
     X(test_init_failure_policies) X(test_restart_request) \
-    X(test_ring_fifo_full_empty) X(test_ring_index_wrap) X(test_ring_zero_copy) \
-    X(test_ring_notifies_consumer) X(test_ring_cfg_rejects) \
-    X(test_budget_overrun) X(test_precision_warning) X(test_health_while_idle) \
-    X(test_alive_starvation_stops_health) X(test_alive_restart_then_fatal) X(test_alive_stop)
+    RING_TESTS(X) ZC_TESTS(X) SUPERVISE_TESTS(X)
+
+/* module-dependent groups (D12) */
+#if SOS_CFG_RING_ENABLE
+#define RING_TESTS(X) X(test_ring_fifo_full_empty) X(test_ring_index_wrap) \
+    X(test_ring_notifies_consumer) X(test_ring_cfg_rejects)
+#else
+#define RING_TESTS(X) X(test_rings_disabled)
+#endif
+#if SOS_CFG_RING_ZERO_COPY
+#define ZC_TESTS(X) X(test_ring_zero_copy) X(test_ring_owner_restart) X(test_ring_owner_stop)
+#else
+#define ZC_TESTS(X)
+#endif
+#if SOS_CFG_SUPERVISE_ENABLE
+#define SUPERVISE_TESTS(X) X(test_budget_overrun) X(test_precision_warning) \
+    X(test_health_while_idle) X(test_alive_starvation_stops_health) \
+    X(test_alive_restart_then_fatal) X(test_alive_stop)
+#else
+#define SUPERVISE_TESTS(X) X(test_supervise_disabled)
+#endif
 
 #define DECLARE(name) void name(void);
 TESTS(DECLARE)
@@ -29,7 +46,9 @@ TESTS(DECLARE)
 
 int main(void)
 {
-    printf("smartOs host tests (virtual time), %d-bit ticks\n", SOS_PLATFORM_TICK_BITS);
+    printf("smartOs host tests (virtual time), %d-bit ticks, ring=%d zero-copy=%d supervise=%d\n",
+           SOS_PLATFORM_TICK_BITS, SOS_CFG_RING_ENABLE, SOS_CFG_RING_ZERO_COPY,
+           SOS_CFG_SUPERVISE_ENABLE);
     TESTS(RUN)
     printf("%d checks, %d failed\n", t_checks, t_fail);
     return (t_fail == 0) ? 0 : 1;

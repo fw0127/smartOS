@@ -24,8 +24,8 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-GEN_VERSION = (0, 3, 0)
-ABI_VERSION = 2
+GEN_VERSION = (0, 5, 0)
+ABI_VERSION = 3
 FG_MAX = 32
 RING_MAX_CAP = 32768
 EVENTS_PER_TASK = 31              # bit 31 is SOS_EV_ALARM
@@ -44,7 +44,8 @@ HOOK_PROTOS = {
     "on_ring_overflow": "void {}(uint8_t ring)",
 }
 KERNEL_KEYS = {"time_unit_us", "errlog_depth", "overrun_is_error",
-               "health_enable", "health_min_interval"}
+               "health_enable", "health_min_interval",
+               "ring_enable", "ring_zero_copy", "supervise_enable"}
 TASK_KEYS = {"name", "prio", "trigger", "period", "offset", "events", "budget",
              "alive_window", "again_limit", "on_error", "max_restart",
              "min_interarrival", "init", "run", "done", "ctx"}
@@ -103,6 +104,9 @@ class Config:
     overrun_is_error: bool
     health_enable: bool
     health_min_interval: int
+    ring_enable: bool
+    ring_zero_copy: bool
+    supervise_enable: bool
     hooks: dict[str, str]
     tasks: list[Task]               # sorted: foreground by prio, then background
     rings: list[Ring]
@@ -186,8 +190,9 @@ def parse(doc: dict, source: str = "<config>") -> Config:
     errlog = _uint(c, "[kernel]", "errlog_depth", k.get("errlog_depth", 8), 1024)
     if errlog < 1:
         c.fail("[kernel]", "'errlog_depth' must be >= 1")
-    for b in ("overrun_is_error", "health_enable"):
-        if not isinstance(k.get(b, False), bool):
+    for b in ("overrun_is_error", "health_enable", "ring_enable", "ring_zero_copy",
+              "supervise_enable"):
+        if b in k and not isinstance(k[b], bool):
             c.fail("[kernel]", f"'{b}' must be true or false")
     health_iv = _time(c, "[kernel]", "health_min_interval",
                       k.get("health_min_interval", "10ms"), unit_us)
@@ -233,9 +238,25 @@ def parse(doc: dict, source: str = "<config>") -> Config:
     for i, r in enumerate(rings):
         r.rid = i
 
+    # optional modules (D12): rings default to "compiled in iff declared"
+    ring_enable = k.get("ring_enable", bool(rings))
+    ring_zc = k.get("ring_zero_copy", ring_enable)
+    supervise = k.get("supervise_enable", True)
+    if rings and not ring_enable:
+        c.fail("[kernel]", "'ring_enable' is false but [[ring]] entries are declared")
+    if ring_zc and not ring_enable:
+        c.fail("[kernel]", "'ring_zero_copy' requires 'ring_enable'")
+    if not supervise:
+        for t in ordered:
+            if t.alive_window:
+                c.fail(f"task '{t.name}'", "'alive_window' requires supervise_enable = true")
+        for key in ("health_enable", "overrun_is_error"):
+            if k.get(key):
+                c.fail("[kernel]", f"'{key}' requires supervise_enable = true")
+
     cfg = Config(source, unit_us, errlog, bool(k.get("overrun_is_error", False)),
-                 bool(k.get("health_enable", True)), health_iv, hooks, ordered,
-                 rings, headers)
+                 bool(k.get("health_enable", True)), health_iv, ring_enable, ring_zc,
+                 supervise, hooks, ordered, rings, headers)
     cfg.digest = _digest(doc)
     return cfg
 
@@ -433,6 +454,9 @@ def render_cfg_h(cfg: Config) -> str:
            f"#define SOS_CFG_OVERRUN_IS_ERROR    {int(cfg.overrun_is_error)}",
            f"#define SOS_CFG_HEALTH_ENABLE       {int(cfg.health_enable)}",
            f"#define SOS_CFG_HEALTH_MIN_INTERVAL {cfg.health_min_interval}u",
+           f"#define SOS_CFG_RING_ENABLE         {int(cfg.ring_enable)}",
+           f"#define SOS_CFG_RING_ZERO_COPY      {int(cfg.ring_zero_copy)}",
+           f"#define SOS_CFG_SUPERVISE_ENABLE    {int(cfg.supervise_enable)}",
            "", "#endif", ""]
     return "\n".join(out)
 
@@ -522,14 +546,16 @@ def render_gen_c(cfg: Config) -> str:
         for r in cfg.rings:
             cons = by_name[r.consumer]
             notify = f"0x{cons.bit(r.notify):08X}u" if r.notify else "0u"
-            consumer = f"SOS_TASK_{cons.name.upper()}" if r.notify else "SOS_TASK_NONE"
+            producer = ("SOS_TASK_NONE" if r.producer == "async"
+                        else f"SOS_TASK_{r.producer.upper()}")
             out += [
                 "    {",
                 f'        .name = "{r.name}",',
                 f"        .storage = l_ring_{r.name},",
                 f"        .elem_size = (uint16_t)sizeof({r.elem_type}),",
                 f"        .capacity = {r.capacity}u,",
-                f"        .consumer = {consumer},",
+                f"        .producer = {producer},",
+                f"        .consumer = SOS_TASK_{cons.name.upper()},",
                 f"        .notify = {notify},",
                 "    },",
             ]

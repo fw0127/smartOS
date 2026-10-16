@@ -28,20 +28,24 @@ typedef struct
     volatile sos_events_t events;
     sos_tick_t            period;       /* converted from the descriptor */
     sos_tick_t            offset;
-    sos_tick_t            budget;
-    sos_tick_t            alive_window;
     sos_tick_t            next_release;
     sos_tick_t            alarm_at;
-    sos_tick_t            last_alive;
     sos_tick_t            max_step;
+#if SOS_CFG_SUPERVISE_ENABLE
+    sos_tick_t            budget;
+    sos_tick_t            alive_window;
+    sos_tick_t            last_alive;
+#endif
 } sos_tcb_t;
 
 typedef struct
 {
     volatile uint16_t head;       /* free-running write index (producer) */
     volatile uint16_t tail;       /* free-running read index (consumer) */
+#if SOS_CFG_RING_ZERO_COPY
     bool              reserved;   /* producer holds a slot (reserve/commit) */
     bool              acquired;   /* consumer holds a slot (acquire/release) */
+#endif
     uint16_t          high_water;
     uint16_t          overflow_cnt;
 } sos_ring_rt_t;
@@ -60,12 +64,14 @@ typedef struct
     uint8_t               fg_count;
     uint8_t               bg_next;
     sos_task_id_t         current;
-    /* supervision */
+#if SOS_CFG_SUPERVISE_ENABLE
     sos_tick_t            sup_interval;
     sos_tick_t            sup_next;       /* next supervision check */
-    /* ring buffers */
+#endif
     uint8_t               ring_count;
+#if SOS_CFG_RING_ENABLE
     sos_ring_rt_t         ring[SOS_CFG_MAX_RINGS];
+#endif
     /* error log */
     uint32_t              err_total;
     sos_error_entry_t     err_log[SOS_CFG_ERRLOG_DEPTH];
@@ -89,11 +95,13 @@ sos_status_t sos_i_event_post(sos_task_id_t id, sos_events_t bits);
 /* sos_ring.c */
 sos_status_t sos_i_ring_check(const sos_cfg_root_t *root);
 void         sos_i_ring_reset(void);
+void         sos_i_ring_owner_reset(sos_task_id_t id);   /* abandon id's reserve/acquire */
 
 /* sos_supervise.c */
 void sos_i_supervise_reset(sos_tick_t now);
 void sos_i_supervise(sos_tick_t now);
 bool sos_i_step_overrun(sos_task_id_t id, sos_tick_t dt); /* true: treat as error */
+bool sos_i_supervise_deadline(sos_tick_t now, sos_tick_t *dl);  /* next check, if any */
 
 /* sos_sched.c */
 void sos_i_ready_set(sos_task_id_t id);             /* caller holds critical section */

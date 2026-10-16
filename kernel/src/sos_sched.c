@@ -83,7 +83,9 @@ static void l_tcb_arm(sos_task_id_t id, sos_tick_t now)
     }
     t->flags = 0u;
     t->again_cnt = 0u;
+#if SOS_CFG_SUPERVISE_ENABLE
     t->last_alive = now;
+#endif
     t->next_release = (sos_tick_t)(now + t->offset);
 
     sos_platform_critical_enter();          /* state and events are read by async posters */
@@ -119,6 +121,7 @@ static void l_stop(sos_task_id_t id)
             sos_k.deferred_bits &= ~L_BIT(id);
         }
         t->flags = 0u;
+        sos_i_ring_owner_reset(id);
         if (L_DESC(id)->done != NULL)
         {
             L_DESC(id)->done(L_DESC(id)->ctx);
@@ -176,6 +179,7 @@ static void l_restart(sos_task_id_t id, bool by_policy)
 {
     const sos_task_desc_t *d = L_DESC(id);
 
+    sos_i_ring_owner_reset(id);
     if (d->done != NULL)
     {
         d->done(d->ctx);
@@ -333,15 +337,19 @@ static void l_dispatch(sos_task_id_t id)
         case SOS_RUN_OK:
             t->restart_cnt = 0u;
             t->again_cnt = 0u;
+#if SOS_CFG_SUPERVISE_ENABLE
             t->last_alive = t1;
             t->flags &= (uint8_t)~SOS_F_ALIVE_FAIL;
+#endif
             l_advance_release(id, t1);
             break;
 
         case SOS_RUN_AGAIN:
             t->restart_cnt = 0u;
+#if SOS_CFG_SUPERVISE_ENABLE
             t->last_alive = t1;
             t->flags &= (uint8_t)~SOS_F_ALIVE_FAIL;
+#endif
             if (l_is_fg(id))
             {
                 sos_platform_critical_enter();
@@ -429,9 +437,10 @@ static sos_status_t l_check(const sos_cfg_root_t *root, uint8_t *fg_out)
 
         if ((d->run == NULL) || (d->on_error > SOS_ON_ERR_FATAL)
             || !l_time_ok(d->period) || !l_time_ok(d->offset)
-            || !l_time_ok(d->budget) || !l_time_ok(d->alive_window))
+            || !l_time_ok(d->budget) || !l_time_ok(d->alive_window)
+            || ((SOS_CFG_SUPERVISE_ENABLE == 0) && (d->alive_window != 0u)))
         {
-            return SOS_E_CFG;
+            return SOS_E_CFG;               /* an alive window would silently not be checked */
         }
         if (d->trigger == SOS_TRIG_BACKGROUND)
         {
@@ -505,12 +514,14 @@ sos_status_t sos_init(const sos_cfg_root_t *root)
         t->max_step = 0u;
         t->period = sos_time_to_ticks(root->tasks[i].period);
         t->offset = sos_time_to_ticks(root->tasks[i].offset);
+#if SOS_CFG_SUPERVISE_ENABLE
         t->budget = sos_time_to_ticks(root->tasks[i].budget);
         t->alive_window = sos_time_to_ticks(root->tasks[i].alive_window);
         if ((t->budget != 0u) && (t->budget < 10u))
         {
             sos_i_error_log(i, SOS_W_PRECISION);    /* resolution > budget / 10 */
         }
+#endif
     }
 
     sos_k.initialized = true;               /* events may be posted from init() */
@@ -567,7 +578,12 @@ sos_poll_result_t sos_poll(sos_tick_t *next_deadline)
 
     if (next_deadline != NULL)
     {
-        sos_tick_t dl = sos_k.sup_next;     /* supervision keeps running while idle */
+        sos_tick_t dl = (sos_tick_t)(now + (sos_tick_t)(SOS_TICK_HALF - 1u));
+        sos_tick_t sup;
+        if (sos_i_supervise_deadline(now, &sup))
+        {
+            dl = sup;                       /* supervision keeps running while idle */
+        }
         if (sos_k.next_due_valid
             && ((sos_tick_t)(sos_k.next_due - now) < (sos_tick_t)(dl - now)))
         {

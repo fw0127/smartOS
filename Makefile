@@ -31,8 +31,25 @@ $(BUILD)/test_$(1): $(SOS_SRC) $(HOST_SRC) $(TEST_SRC) $(wildcard kernel/inc/*.h
 endef
 $(foreach w,$(WIDTHS),$(eval $(call TEST_template,$(w))))
 
-test: $(foreach w,$(WIDTHS),$(BUILD)/test_$(w))
-	@for w in $(WIDTHS); do ./$(BUILD)/test_$$w || exit 1; done
+# Optional-module variants (D12), 32-bit ticks: each must build warning-free
+# and pass the tests that apply to it.
+VARIANTS := nozc:-DSOS_CFG_RING_ZERO_COPY=0 \
+            noring:-DSOS_CFG_RING_ENABLE=0 \
+            nosup:-DSOS_CFG_SUPERVISE_ENABLE=0 \
+            minimal:-DSOS_CFG_RING_ENABLE=0~-DSOS_CFG_SUPERVISE_ENABLE=0
+define VARIANT_template
+$(BUILD)/test_$(1): $(SOS_SRC) $(HOST_SRC) $(TEST_SRC) $(wildcard kernel/inc/*.h kernel/src/*.h platform/*.h platform/host/*.h test/*.h)
+	@mkdir -p $(BUILD)/obj_$(1)
+	for f in $(SOS_SRC) $(HOST_SRC); do $(CC) $(WARN) $(EXTRA) $(2) $(INC) -Itest \
+	    -c $$$$f -o $(BUILD)/obj_$(1)/$$$$(basename $$$$f .c).o || exit 1; done
+	$(CC) -std=c99 -Wall -Wextra -Werror $(EXTRA) $(2) $(INC) -Itest \
+	    $(TEST_SRC) $(BUILD)/obj_$(1)/*.o -o $$@
+endef
+$(foreach v,$(VARIANTS),$(eval $(call VARIANT_template,$(word 1,$(subst :, ,$(v))),$(subst ~, ,$(word 2,$(subst :, ,$(v)))))))
+VARIANT_BINS := $(foreach v,$(VARIANTS),$(BUILD)/test_$(word 1,$(subst :, ,$(v))))
+
+test: $(foreach w,$(WIDTHS),$(BUILD)/test_$(w)) $(VARIANT_BINS)
+	@for b in $(foreach w,$(WIDTHS),$(BUILD)/test_$(w)) $(VARIANT_BINS); do ./$$b || exit 1; done
 
 test-san:
 	$(MAKE) clean

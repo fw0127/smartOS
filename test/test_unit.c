@@ -226,3 +226,59 @@ void test_background_high_id(void)
     CHECK_EQ(sos_poll(NULL), SOS_POLL_RAN);
     CHECK_EQ(g_c[31].runs, 1u);
 }
+
+#if !SOS_CFG_RING_ENABLE
+/* Rings compiled out: a configuration that declares rings is rejected. */
+void test_rings_disabled(void)
+{
+    static uint32_t store[4];
+    static sos_ring_desc_t rd;
+    static sos_cfg_root_t root;
+    sos_task_desc_t d[1];
+
+    fresh(0u);
+    d[0] = tdesc("t", 0u, SOS_TRIG_EVENT, 0u, 0u, 1u, &g_c[0]);
+    memset(&rd, 0, sizeof rd);
+    rd.storage = store;
+    rd.elem_size = 4u;
+    rd.capacity = 4u;
+    rd.producer = SOS_TASK_NONE;
+    rd.consumer = SOS_TASK_NONE;
+    root = troot(d, 1u);
+    root.rings = &rd;
+    root.ring_count = 1u;
+    CHECK_EQ(sos_init(&root), SOS_E_CFG);
+    root.ring_count = 0u;
+    CHECK_EQ(sos_init(&root), SOS_OK);
+}
+#endif
+
+#if !SOS_CFG_SUPERVISE_ENABLE
+/* Supervision compiled out: alive windows are rejected (they would silently
+ * not be checked), budgets are accepted but ignored, no health signal. */
+void test_supervise_disabled(void)
+{
+    sos_task_desc_t d[1];
+    static sos_cfg_root_t root;
+    sos_task_stats_t st;
+
+    fresh(0u);
+    memset(g_c, 0, sizeof g_c);
+    d[0] = tdesc("t", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_c[0]);
+    d[0].alive_window = 5000u;
+    root = troot(d, 1u);
+    CHECK_EQ(sos_init(&root), SOS_E_CFG);
+
+    d[0].alive_window = 0u;
+    d[0].budget = 10u;
+    g_c[0].cost = 500u;
+    CHECK_EQ(sos_init(&root), SOS_OK);
+    run_for(20000u);
+    CHECK_EQ(g_c[0].runs, 20u);
+    CHECK_EQ(sos_task_get_stats(0u, &st), SOS_OK);
+    CHECK_EQ(st.overrun_cnt, 0u);
+    CHECK_EQ(host_health_calls(), 0u);
+    CHECK_EQ(host_wait_calls(), 19u);                 /* only between the 20 releases: no supervision wake-ups */
+}
+#endif
+

@@ -112,10 +112,12 @@ static void l_async_counter(void *arg)
     (void)arg;
     while (!stop)
     {
+        sos_platform_critical_enter();          /* callable from async, nested */
         sos_platform_critical_enter();
         l_counter++;
         (void)sos_platform_now();               /* now is callable from async */
         stop = l_stop;
+        sos_platform_critical_exit();
         sos_platform_critical_exit();
     }
 }

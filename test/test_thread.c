@@ -160,8 +160,12 @@ static int run_mode(int mode, const char *name)
     root.abi_version = SOS_ABI_VERSION;
     root.tasks = g_tasks;
     root.task_count = 1u;
-    g_rings[0] = (sos_ring_desc_t){ "values", g_vals, sizeof(uint32_t), 64u, T_CONSUMER, EV_DATA };
-    g_rings[1] = (sos_ring_desc_t){ "records", g_recs, sizeof(record_t), 16u, T_CONSUMER, EV_DATA };
+    g_rings[0] = (sos_ring_desc_t){ .name = "values", .storage = g_vals,
+        .elem_size = sizeof(uint32_t), .capacity = 64u,
+        .producer = SOS_TASK_NONE, .consumer = T_CONSUMER, .notify = EV_DATA };
+    g_rings[1] = (sos_ring_desc_t){ .name = "records", .storage = g_recs,
+        .elem_size = sizeof(record_t), .capacity = 16u,
+        .producer = SOS_TASK_NONE, .consumer = T_CONSUMER, .notify = EV_DATA };
     root.rings = g_rings;
     root.ring_count = 2u;
 

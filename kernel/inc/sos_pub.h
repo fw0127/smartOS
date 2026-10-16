@@ -28,16 +28,20 @@ sos_status_t sos_event_set(sos_task_id_t id, sos_events_t bits);
 sos_status_t sos_event_set_async(sos_task_id_t id, sos_events_t bits);
 sos_events_t sos_event_peek(sos_task_id_t id);
 
-/* ---- ring buffers (one producer, one consumer) ---------------------------- */
+/* ---- ring buffers (one producer, one consumer; SOS_CFG_RING_ENABLE) ------- */
+#if SOS_CFG_RING_ENABLE
 sos_status_t sos_ring_put(sos_ring_t r, const void *elem);   /* producer, async-safe */
 sos_status_t sos_ring_get(sos_ring_t r, void *out);          /* consumer */
 sos_status_t sos_ring_peek(sos_ring_t r, void *out);         /* consumer */
+uint16_t     sos_ring_count(sos_ring_t r);
+sos_status_t sos_ring_get_stats(sos_ring_t r, sos_ring_stats_t *out);
+#if SOS_CFG_RING_ZERO_COPY
 void        *sos_ring_reserve(sos_ring_t r);                 /* producer, async-safe */
 sos_status_t sos_ring_commit(sos_ring_t r);                  /* producer, async-safe */
 const void  *sos_ring_acquire(sos_ring_t r);                 /* consumer */
 sos_status_t sos_ring_release(sos_ring_t r);                 /* consumer */
-uint16_t     sos_ring_count(sos_ring_t r);
-sos_status_t sos_ring_get_stats(sos_ring_t r, sos_ring_stats_t *out);
+#endif
+#endif
 
 /* ---- time ---------------------------------------------------------------- */
 sos_tick_t sos_time_now(void);

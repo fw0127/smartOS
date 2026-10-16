@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.5.0 — review fixes (unreleased)
+
+- Platform contract: the critical section must also be callable from an
+  asynchronous context without blocking, and acts as a full memory barrier
+  (the kernel relied on both; now stated, and the contract suite enters it
+  nested from the asynchronous context).
+- Ring ownership (D11): `sos_ring_desc_t` gains `producer`; `consumer` is
+  always the consumer task. Stopping or restarting an owner task abandons
+  its unfinished reserve (slot discarded) or acquire (element redelivered).
+  Previously a task restarted between reserve and commit got `SOS_E_STATE`
+  from every later `put`. Configuration ABI 3.
+- Optional modules (D12): `SOS_CFG_RING_ENABLE`, `SOS_CFG_RING_ZERO_COPY`,
+  `SOS_CFG_SUPERVISE_ENABLE`; `sosgen` `[kernel]` keys with consistency
+  checks; `make test` builds and runs four module combinations.
+- Documented: strict-priority starvation is by design and detected by alive
+  supervision; budgets are after-the-fact; "one producer" means one
+  execution context.
+- Fix: gcc `-Wtype-limits` errors with 16- and 64-bit ticks.
+
 ## v0.4.0 — platform contract conformance suite (unreleased)
 
 - `platform/contract_tests`: platform-independent conformance checks of the

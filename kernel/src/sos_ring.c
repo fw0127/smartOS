@@ -12,6 +12,8 @@
  */
 #include "sos_kernel_pri.h"
 
+#if SOS_CFG_RING_ENABLE
+
 #define L_DESC(r)  (&sos_k.cfg->rings[(r)])
 #define L_RT(r)    (&sos_k.ring[(r)])
 
@@ -134,7 +136,10 @@ sos_status_t sos_i_ring_check(const sos_cfg_root_t *root)
         if ((d->storage == NULL) || (d->elem_size == 0u)
             || (cap == 0u) || (cap > SOS_RING_MAX_CAP) || ((cap & (uint16_t)(cap - 1u)) != 0u)
             || ((d->notify & SOS_EV_ALARM) != 0u)
-            || ((d->notify != 0u) && (d->consumer >= root->task_count)))
+            || ((d->notify != 0u) && (d->consumer == SOS_TASK_NONE))
+            || ((d->consumer != SOS_TASK_NONE) && (d->consumer >= root->task_count))
+            || ((d->producer != SOS_TASK_NONE) && (d->producer >= root->task_count))
+            || ((d->producer != SOS_TASK_NONE) && (d->producer == d->consumer)))
         {
             return SOS_E_CFG;
         }
@@ -150,11 +155,37 @@ void sos_i_ring_reset(void)
     {
         sos_k.ring[i].head = 0u;
         sos_k.ring[i].tail = 0u;
+#if SOS_CFG_RING_ZERO_COPY
         sos_k.ring[i].reserved = false;
         sos_k.ring[i].acquired = false;
+#endif
         sos_k.ring[i].high_water = 0u;
         sos_k.ring[i].overflow_cnt = 0u;
     }
+}
+
+/* An owner task is stopped or restarted: abandon what it left unfinished.
+ * A producer's reserved slot is discarded (never published); a consumer's
+ * acquired element stays queued and is delivered again. */
+void sos_i_ring_owner_reset(sos_task_id_t id)
+{
+#if SOS_CFG_RING_ZERO_COPY
+    uint8_t i;
+
+    for (i = 0u; i < sos_k.ring_count; i++)
+    {
+        if (L_DESC(i)->producer == id)
+        {
+            L_RT(i)->reserved = false;
+        }
+        if (L_DESC(i)->consumer == id)
+        {
+            L_RT(i)->acquired = false;
+        }
+    }
+#else
+    (void)id;                               /* by-value access leaves nothing open */
+#endif
 }
 
 sos_status_t sos_ring_put(sos_ring_t r, const void *elem)
@@ -165,10 +196,12 @@ sos_status_t sos_ring_put(sos_ring_t r, const void *elem)
     {
         return SOS_E_PARAM;
     }
+#if SOS_CFG_RING_ZERO_COPY
     if (L_RT(r)->reserved)
     {
         return SOS_E_STATE;
     }
+#endif
     slot = l_claim(r);
     if (slot == NULL)
     {
@@ -179,6 +212,7 @@ sos_status_t sos_ring_put(sos_ring_t r, const void *elem)
     return SOS_OK;
 }
 
+#if SOS_CFG_RING_ZERO_COPY
 void *sos_ring_reserve(sos_ring_t r)
 {
     uint8_t *slot;
@@ -213,6 +247,7 @@ sos_status_t sos_ring_commit(sos_ring_t r)
     l_publish(r);
     return SOS_OK;
 }
+#endif
 
 sos_status_t sos_ring_get(sos_ring_t r, void *out)
 {
@@ -222,10 +257,12 @@ sos_status_t sos_ring_get(sos_ring_t r, void *out)
     {
         return SOS_E_PARAM;
     }
+#if SOS_CFG_RING_ZERO_COPY
     if (L_RT(r)->acquired)
     {
         return SOS_E_STATE;
     }
+#endif
     slot = l_front(r);
     if (slot == NULL)
     {
@@ -253,6 +290,7 @@ sos_status_t sos_ring_peek(sos_ring_t r, void *out)
     return SOS_OK;
 }
 
+#if SOS_CFG_RING_ZERO_COPY
 const void *sos_ring_acquire(sos_ring_t r)
 {
     const uint8_t *slot;
@@ -283,6 +321,7 @@ sos_status_t sos_ring_release(sos_ring_t r)
     l_pop(r);
     return SOS_OK;
 }
+#endif
 
 uint16_t sos_ring_count(sos_ring_t r)
 {
@@ -311,3 +350,21 @@ sos_status_t sos_ring_get_stats(sos_ring_t r, sos_ring_stats_t *out)
     sos_platform_critical_exit();
     return SOS_OK;
 }
+
+#else /* !SOS_CFG_RING_ENABLE */
+
+sos_status_t sos_i_ring_check(const sos_cfg_root_t *root)
+{
+    return (root->ring_count == 0u) ? SOS_OK : SOS_E_CFG;  /* rings not compiled in */
+}
+
+void sos_i_ring_reset(void)
+{
+}
+
+void sos_i_ring_owner_reset(sos_task_id_t id)
+{
+    (void)id;
+}
+
+#endif

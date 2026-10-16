@@ -65,15 +65,33 @@ class Valid(unittest.TestCase):
         self.assertIn("not covered by\n * the MPL-2.0", h)
         self.assertIn("static uint32_t l_ring_q[8];", c)
         self.assertIn(".notify = 0x00000002u", c)
+        self.assertIn(".producer = SOS_TASK_NONE,", c)       # async producer
         self.assertIn(".consumer = SOS_TASK_HI", c)
+        self.assertIn("#define SOS_CFG_RING_ENABLE         1", k)
+        self.assertIn("#define SOS_CFG_RING_ZERO_COPY      1", k)
+        self.assertIn("#define SOS_CFG_SUPERVISE_ENABLE    1", k)
         self.assertIn(f".abi_version = {sosgen.ABI_VERSION}u", c)
         self.assertIn("#define SOS_CFG_MAX_TASKS           3u", k)
 
     def test_no_rings(self):
         cfg = sosgen.parse(cfg_with(lambda d: d.pop("ring")))
         c = sosgen.render_gen_c(cfg)
+        k = sosgen.render_cfg_h(cfg)
         self.assertIn(".rings = NULL,", c)
-        self.assertIn("#define SOS_CFG_MAX_RINGS           1u", sosgen.render_cfg_h(cfg))
+        self.assertIn("#define SOS_CFG_MAX_RINGS           1u", k)
+        self.assertIn("#define SOS_CFG_RING_ENABLE         0", k)   # not compiled in
+        self.assertIn("#define SOS_CFG_RING_ZERO_COPY      0", k)
+
+    def test_task_producer_and_zero_copy_off(self):
+        def m(d):
+            d["ring"][0]["producer"] = "lo"
+            d["kernel"] = {"ring_zero_copy": False, "supervise_enable": False,
+                           "health_enable": False}
+        cfg = sosgen.parse(cfg_with(m))
+        self.assertIn(".producer = SOS_TASK_LO,", sosgen.render_gen_c(cfg))
+        k = sosgen.render_cfg_h(cfg)
+        self.assertIn("#define SOS_CFG_RING_ZERO_COPY      0", k)
+        self.assertIn("#define SOS_CFG_SUPERVISE_ENABLE    0", k)
 
     def test_deterministic(self):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
@@ -173,6 +191,20 @@ class Rejects(unittest.TestCase):
 
     def test_time_unit_must_divide_second(self):
         self.bad(lambda d: d.update(kernel={"time_unit_us": 7}), "divide")
+
+    # optional modules (D12)
+    def test_rings_declared_but_disabled(self):
+        self.bad(lambda d: d.update(kernel={"ring_enable": False}), "'ring_enable' is false")
+
+    def test_zero_copy_without_rings(self):
+        self.bad(lambda d: (d.pop("ring"), d.update(kernel={"ring_zero_copy": True})),
+                 "requires 'ring_enable'")
+
+    def test_alive_window_without_supervision(self):
+        def m(d):
+            d["kernel"] = {"supervise_enable": False}
+            d["task"][0]["alive_window"] = "30ms"
+        self.bad(m, "requires supervise_enable")
 
     # general
     def test_unknown_key(self):

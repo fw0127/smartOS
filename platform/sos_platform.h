@@ -36,7 +36,12 @@ typedef uint64_t sos_tick_t;
 /* Time source: monotonic, wraps naturally, non-blocking, callable anywhere. */
 sos_tick_t sos_platform_now(void);
 
-/* Critical section: not interrupted by asynchronous contexts; nestable. */
+/* Critical section: not interrupted by asynchronous contexts; nestable.
+ * Must also be callable FROM an asynchronous context (the kernel enters it
+ * inside sos_event_set_async and sos_ring_put / reserve / commit), so it may
+ * not block there; e.g. use the interrupt-safe variant of an RTOS critical
+ * section, not a task-level mutex. It acts as a full memory barrier: writes
+ * made before exit are visible to whoever enters next. */
 void sos_platform_critical_enter(void);
 void sos_platform_critical_exit(void);
 

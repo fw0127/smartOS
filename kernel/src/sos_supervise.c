@@ -10,6 +10,8 @@
  */
 #include "sos_kernel_pri.h"
 
+#if SOS_CFG_SUPERVISE_ENABLE
+
 void sos_i_supervise_reset(sos_tick_t now)
 {
     sos_k.sup_interval = sos_time_to_ticks((sos_time_t)SOS_CFG_HEALTH_MIN_INTERVAL);
@@ -79,3 +81,38 @@ void sos_i_supervise(sos_tick_t now)
     (void)healthy;
 #endif
 }
+
+bool sos_i_supervise_deadline(sos_tick_t now, sos_tick_t *dl)
+{
+    (void)now;
+    *dl = sos_k.sup_next;
+    return true;
+}
+
+#else /* !SOS_CFG_SUPERVISE_ENABLE: no budgets, alive windows or health signal */
+
+void sos_i_supervise_reset(sos_tick_t now)
+{
+    (void)now;
+}
+
+void sos_i_supervise(sos_tick_t now)
+{
+    (void)now;
+}
+
+bool sos_i_step_overrun(sos_task_id_t id, sos_tick_t dt)
+{
+    (void)id;
+    (void)dt;
+    return false;
+}
+
+bool sos_i_supervise_deadline(sos_tick_t now, sos_tick_t *dl)
+{
+    (void)now;
+    (void)dl;
+    return false;
+}
+
+#endif
