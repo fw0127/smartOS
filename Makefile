@@ -57,7 +57,9 @@ test-san:
 	$(MAKE) test EXTRA="$(SAN)"
 
 # Thread platform: real time, producer threads as asynchronous contexts.
-THREAD_INC := $(SOS_INC) -Iplatform/host_thread -Itest
+# Supervision every 1 s: the kernel then sleeps long when idle, so a lost
+# wake-up shows as ~1 s latency and cannot hide behind a 10 ms supervision tick.
+THREAD_INC := $(SOS_INC) -Iplatform/host_thread -Itest -DSOS_CFG_HEALTH_MIN_INTERVAL=1000000u
 THREAD_SRC := platform/host_thread/thread_platform.c
 test-thread: $(BUILD)/test_thread
 	./$(BUILD)/test_thread

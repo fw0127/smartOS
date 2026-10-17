@@ -210,7 +210,9 @@ static int run_mode(int mode, const char *name)
     else
     {
         CHECK(g_wakes == N_WAKE);
-        CHECK(g_max_latency < 20000u);                       /* < 20 ms even on a busy host */
+        /* a lost wake-up would wait for the next 1 s supervision tick; 200 ms
+         * leaves room for slow shared CI runners under ThreadSanitizer */
+        CHECK(g_max_latency < 200000u);
         printf("  %-28s ok=%s  wakes=%u max-latency=%llu us\n",
                name, (g_fail == before) ? "yes" : "NO", g_wakes,
                (unsigned long long)g_max_latency);
