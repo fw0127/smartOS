@@ -37,9 +37,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: install avr-gcc
-        run: sudo apt-get update && sudo apt-get install -y gcc-avr avr-libc binutils-avr
+      - name: install avr-gcc and simavr
+        run: sudo apt-get update && sudo apt-get install -y gcc-avr avr-libc binutils-avr simavr
       - name: build contract and demo firmware
         run: |
           make -C platform/avr_nano build/contract.hex build/demo.hex
           avr-size platform/avr_nano/build/contract.elf platform/avr_nano/build/demo.elf
+      - name: contract suite in simavr
+        run: make -C platform/avr_nano ci-sim-contract
+      - name: kernel demo in simavr
+        run: make -C platform/avr_nano ci-sim-demo

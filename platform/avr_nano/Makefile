@@ -69,7 +69,25 @@ monitor:
 sim-%: $(BUILD)/%.elf
 	simavr -m $(MCU) -f $(patsubst %UL,%,$(F_CPU)) $<
 
+# Unattended simulator checks for CI (Linux: needs coreutils timeout/stdbuf).
+# The firmware runs forever, so the simulator is stopped after SIM_TIMEOUT
+# wall-clock seconds and its serial output is checked.
+SIM_TIMEOUT ?= 90
+SIM_RUN = timeout -s INT $(SIM_TIMEOUT) stdbuf -oL -eL simavr -m $(MCU) -f $(patsubst %UL,%,$(F_CPU))
+
+ci-sim-contract: $(BUILD)/contract.elf
+	$(SIM_RUN) $< > $(BUILD)/contract.sim.log 2>&1 || true
+	@cat $(BUILD)/contract.sim.log
+	@grep -q "CONTRACT PASS" $(BUILD)/contract.sim.log || (echo "ci-sim-contract: no CONTRACT PASS" && false)
+
+# demo: at least 5 one-second reports, all with errors=0, and no halt
+ci-sim-demo: $(BUILD)/demo.elf
+	$(SIM_RUN) $< > $(BUILD)/demo.sim.log 2>&1 || true
+	@cat $(BUILD)/demo.sim.log
+	@n=$$(grep -c "errors=0" $(BUILD)/demo.sim.log); echo "reports with errors=0: $$n"; test $$n -ge 5
+	@! grep -E "errors=[1-9]|HALT|fatal" $(BUILD)/demo.sim.log
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean monitor
+.PHONY: all clean monitor ci-sim-contract ci-sim-demo
