@@ -58,6 +58,8 @@ demo 接线:普通按钮接 D2 与 GND(已开内部上拉);也可以先用一根
 
 ## 异步上下文与契约套件
 
+CI(`.github/workflows/ci.yml` 的 avr 任务)每次推送都会编译两个固件,并用 `make ci-sim-contract` / `make ci-sim-demo` 在 simavr 中运行、检查输出。
+
 通用套件的两项异步检查(`critical: excludes async`、`notify: async ends wait`)假设异步上下文是能并发长循环、等主流程叫停的线程。单核 MCU 只有运行到完成的中断,无法这样表达,所以这里报告为 skipped。对目标真正重要的性质由 `avr_contract.c` 用 Timer2 单次中断另行检查:
 
 - `avr: isr notify ends wait` — 中断里的 notify 结束进行中的等待

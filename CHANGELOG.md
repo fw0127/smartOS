@@ -22,7 +22,12 @@
   higher-priority load reached 1; it now reports divergence and the load.
 - Docs: Nano overhead table, recommended `dispatch_overhead`, capacity
   (~6-7 kHz single-element interrupts), Optiboot and simavr caveats.
-- CI: builds the AVR firmware with gcc-avr.
+- CI: builds the AVR firmware with gcc-avr and runs the contract suite and
+  the demo in simavr on every push (`make ci-sim-contract`, `ci-sim-demo`).
+- AVR contract: new check `wait across counter wrap` (OCR1A wraps with the
+  counter; wake-up never later than 1 ms after the deadline).
+- Thread test: 1 s supervision tick so a lost wake-up cannot hide behind
+  the 10 ms tick; 200 ms bound (21 ms under TSan on a CI runner had failed).
 
 ## v0.5.2 — third review round
 
