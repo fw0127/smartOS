@@ -165,6 +165,34 @@ static void ct_avr_now_across_overflow(void)
     l_result("avr: now across overflow", mono && ((sos_tick_t)(t1 - prev) < 2500u));
 }
 
+/* wait_until across the 16-bit counter wrap: start each wait just before
+ * TCNT1 wraps, so OCR1A = TCNT1 + dist wraps to a small value. The compare
+ * must still fire dist ticks later (not one counter period = 262 ms later).
+ * 16 trials at different offsets and distances; the wake-up may never be
+ * later than 1 ms after the deadline. */
+static void ct_avr_wait_across_wrap(void)
+{
+    uint8_t i;
+    sos_tick_t worst = 0u;
+
+    for (i = 0u; i < 16u; i++)
+    {
+        uint16_t lead = (uint16_t)(16u + 24u * i);           /* ticks before the wrap */
+        sos_tick_t dist = (sos_tick_t)(lead + 100u + 50u * i);/* deadline after the wrap */
+        sos_tick_t deadline, late;
+
+        while (TCNT1 < (uint16_t)(0xFFFFu - lead)) { }
+        deadline = (sos_tick_t)(sos_platform_now() + dist);
+        while ((sos_tick_t)(sos_platform_now() - deadline) >= 0x80000000ul)
+        {
+            sos_platform_wait_until(deadline);                /* may return early */
+        }
+        late = (sos_tick_t)(sos_platform_now() - deadline);
+        if (late > worst) { worst = late; }
+    }
+    l_result("avr: wait across counter wrap", worst < (SOS_PLATFORM_TICKS_PER_SEC / 1000u));
+}
+
 /* Timer1 overflows every 65536 ticks; let several pass with the overflow
  * interrupt working normally and compare against the busy-wait count. */
 static void ct_avr_long_run(void)
@@ -200,6 +228,7 @@ int main(void)
     ct_avr_isr_notify_ends_wait();
     ct_avr_critical_blocks_isr();
     ct_avr_now_across_overflow();
+    ct_avr_wait_across_wrap();
     ct_avr_long_run();
     failed += l_fail;
 

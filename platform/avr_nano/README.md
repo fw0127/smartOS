@@ -63,6 +63,7 @@ demo 接线:普通按钮接 D2 与 GND(已开内部上拉);也可以先用一根
 - `avr: isr notify ends wait` — 中断里的 notify 结束进行中的等待
 - `avr: critical blocks isr` — 嵌套临界区挡住中断,退出后放行
 - `avr: now across overflow` — 关中断跨越 Timer1 回绕时时间仍单调正确
+- `avr: wait across counter wrap` — 在 Timer1 将要回绕时开始等待(比较值随之回绕),16 次中醒来都不晚于截止时刻 1 ms(v0.6 新增,回应"比较匹配可能晚一整个计数周期"的疑问)
 - `avr: 3 s monotonic` — 多次溢出后仍单调
 
 建议后续把套件的异步桩改成"单步、可由中断承载"的形式(例如由周期中断反复调用、每次只做一步),这样 MCU 平台也能跑同一组检查。
