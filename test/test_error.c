@@ -299,6 +299,93 @@ void test_lifecycle_identity_and_deferral(void)
     CHECK_EQ(st.state, SOS_STATE_STOPPED);
 }
 
+/* ---- D18: control requests from done(), state after a failed init -------- */
+
+static sos_status_t g_done_stop_self;
+static sos_status_t g_done_restart_self;
+static sos_status_t g_done_restart_other;
+
+static void ctl_done(void *ctx)
+{
+    tt_t *t = (tt_t *)ctx;
+    t->dones++;
+    if (sos_task_self() == 0u)
+    {
+        g_done_stop_self = sos_task_stop(0u);
+        g_done_restart_self = sos_task_restart(0u);
+        g_done_restart_other = sos_task_restart(1u);
+    }
+}
+
+static sos_status_t alarm_then_fail(void *ctx)
+{
+    tt_t *t = (tt_t *)ctx;
+    t->inits++;
+    CHECK_EQ(sos_task_set_alarm(500u), SOS_OK);
+    return (t->inits <= t->init_failures) ? SOS_E_INIT : SOS_OK;
+}
+
+void test_done_requests_and_failed_init(void)
+{
+    sos_task_stats_t st;
+    uint8_t i;
+
+    /* done() may not stop or restart its own task (it is being stopped or
+     * restarted already); requests for other tasks are deferred as usual */
+    for (i = 0u; i < 2u; i++)
+    {
+        reset();
+        g_d[0] = tdesc("X", 0u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[0]);
+        g_d[0].done = ctl_done;
+        g_d[1] = tdesc("Y", 1u, SOS_TRIG_PERIODIC, 1000u, 0u, 0u, &g_t[1]);
+        g_done_stop_self = g_done_restart_self = g_done_restart_other = SOS_OK;
+        CHECK_EQ(start(2u), SOS_OK);
+        run_for(100u);
+        if (i == 0u)
+        {
+            CHECK_EQ(sos_task_stop(0u), SOS_OK);        /* main context: at once */
+        }
+        else
+        {
+            CHECK_EQ(sos_task_restart(0u), SOS_OK);
+        }
+        CHECK_EQ(g_t[0].dones, 1u);
+        CHECK_EQ(g_done_stop_self, SOS_E_STATE);
+        CHECK_EQ(g_done_restart_self, SOS_E_STATE);
+        CHECK_EQ(g_done_restart_other, SOS_OK);
+        CHECK_EQ(g_t[1].dones, 0u);                     /* deferred to the next poll */
+        run_for(3000u);
+        CHECK_EQ(g_t[1].dones, 1u);
+        CHECK_EQ(g_t[1].inits, 2u);
+        CHECK_EQ(g_t[0].inits, (i == 0u) ? 1u : 2u);    /* stop stays a stop */
+        CHECK_EQ(g_t[0].dones, 1u);
+        CHECK_EQ(sos_task_get_stats(0u, &st), SOS_OK);
+        CHECK_EQ(st.state, (i == 0u) ? SOS_STATE_STOPPED : SOS_STATE_WAITING);
+    }
+
+    /* failed init, policy STOP: what it set up (alarm) and events posted before
+     * are discarded; policy IGNORE: the task starts as if init had succeeded */
+    reset();
+    g_d[0] = tdesc("s", 0u, SOS_TRIG_EVENT, 0u, 0u, 0x1u, &g_t[0]);
+    g_d[0].init = alarm_then_fail;
+    g_d[0].on_error = SOS_ON_ERR_STOP;
+    g_t[0].init_failures = 1u;
+    g_d[1] = tdesc("i", 1u, SOS_TRIG_EVENT, 0u, 0u, 0x1u, &g_t[1]);
+    g_d[1].init = alarm_then_fail;
+    g_d[1].on_error = SOS_ON_ERR_IGNORE;
+    g_t[1].init_failures = 1u;
+    CHECK_EQ(start(2u), SOS_OK);
+    CHECK_EQ(sos_event_peek(0u), 0u);
+    CHECK_EQ(sos_event_set(0u, 0x1u), SOS_E_STATE);    /* stopped */
+    run_for(2000u);
+    CHECK_EQ(g_t[0].runs, 0u);
+    CHECK_EQ(g_t[1].runs, 1u);                          /* its alarm */
+    CHECK_EQ(g_t[1].last_ev, SOS_EV_ALARM);
+    CHECK_EQ(sos_task_get_stats(0u, &st), SOS_OK);
+    CHECK_EQ(st.state, SOS_STATE_STOPPED);
+    CHECK_EQ(st.restart_cnt, 0u);                       /* STOP is not a restart */
+}
+
 /* max_job_steps: the longest AGAIN chain of one job, for checking the
  * max_steps assumption of the analysis on the target. */
 void test_max_job_steps(void)

@@ -96,11 +96,14 @@ static void l_call_done(sos_task_id_t id)
 {
     const sos_task_desc_t *d = L_DESC(id);
     sos_task_id_t saved = sos_k.current;
+    sos_task_id_t saved_done = sos_k.in_done;
 
     if (d->done != NULL)
     {
         sos_k.current = id;
+        sos_k.in_done = id;                 /* D18: done() cannot stop/restart its task */
         d->done(d->ctx);
+        sos_k.in_done = saved_done;
         sos_k.current = saved;
     }
 }
@@ -607,6 +610,7 @@ sos_status_t sos_init(const sos_cfg_root_t *root)
 
     sos_k.initialized = false;
     sos_k.current = SOS_TASK_NONE;
+    sos_k.in_done = SOS_TASK_NONE;
     sos_k.hooks = NULL;
     sos_i_error_reset();
 
@@ -816,9 +820,9 @@ sos_status_t sos_task_stop(sos_task_id_t id)
     {
         return SOS_E_PARAM;
     }
-    if (sos_k.tcb[id].state != (uint8_t)SOS_STATE_WAITING)
+    if ((sos_k.tcb[id].state != (uint8_t)SOS_STATE_WAITING) || (id == sos_k.in_done))
     {
-        return SOS_E_STATE;
+        return SOS_E_STATE;                         /* D18: not from the task's own done() */
     }
     if (sos_k.current == SOS_TASK_NONE)
     {
@@ -839,9 +843,9 @@ sos_status_t sos_task_restart(sos_task_id_t id)
     {
         return SOS_E_PARAM;
     }
-    if (sos_k.tcb[id].state == (uint8_t)SOS_STATE_DORMANT)
+    if ((sos_k.tcb[id].state == (uint8_t)SOS_STATE_DORMANT) || (id == sos_k.in_done))
     {
-        return SOS_E_STATE;
+        return SOS_E_STATE;                         /* D18: not from the task's own done() */
     }
     if (sos_k.current != SOS_TASK_NONE)
     {

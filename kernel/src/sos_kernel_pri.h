@@ -67,6 +67,7 @@ typedef struct
     uint8_t               fg_count;
     uint8_t               bg_next;
     sos_task_id_t         current;        /* task whose callback is running */
+    sos_task_id_t         in_done;        /* task whose done() is running (D18) */
     bool                  req_pending;    /* deferred stop/restart requests (D16) */
 #if SOS_CFG_SUPERVISE_ENABLE
     sos_tick_t            sup_interval;
