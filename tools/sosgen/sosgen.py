@@ -48,7 +48,8 @@ KERNEL_KEYS = {"time_unit_us", "errlog_depth", "overrun_is_error",
                "ring_enable", "ring_zero_copy", "supervise_enable", "dispatch_overhead"}
 TASK_KEYS = {"name", "prio", "trigger", "period", "offset", "events", "budget",
              "alive_window", "again_limit", "on_error", "max_restart",
-             "min_interarrival", "max_steps", "deadline", "init", "run", "done", "ctx"}
+             "min_interarrival", "min_alarm_delay", "max_steps", "deadline",
+             "init", "run", "done", "ctx"}
 RING_KEYS = {"name", "elem_type", "capacity", "producer", "consumer", "notify"}
 TOP_KEYS = {"kernel", "hooks", "task", "ring", "app"}
 
@@ -70,6 +71,7 @@ class Task:
     on_error: str = "fatal"
     max_restart: int = 0
     min_interarrival: int = 0
+    min_alarm_delay: int = 0            # 0 = the task sets no alarms (analysis)
     max_steps: int = 0                  # 0 = not given (analysis assumes 1)
     deadline: int = 0                   # 0 = equal to the release interval
     events: list[str] = field(default_factory=list)
@@ -116,6 +118,7 @@ class Config:
     headers: list[str]
     digest: int = 0
     warnings: list[str] = field(default_factory=list)
+    overhead_given: bool = False        # [kernel] dispatch_overhead was set
 
 
 @dataclass
@@ -262,6 +265,7 @@ def parse(doc: dict, source: str = "<config>") -> Config:
     cfg = Config(source, unit_us, errlog, bool(k.get("overrun_is_error", False)),
                  bool(k.get("health_enable", True)), health_iv, ring_enable, ring_zc,
                  supervise, overhead, hooks, ordered, rings, headers)
+    cfg.overhead_given = "dispatch_overhead" in k
     cfg.digest = _digest(doc)
     return cfg
 
@@ -287,7 +291,7 @@ def _parse_task(c: _Ctx, i: int, t: dict, unit_us: int) -> Task:
 
     if background:
         for key in ("prio", "period", "offset", "events", "alive_window", "again_limit",
-                    "min_interarrival", "max_steps", "deadline"):
+                    "min_interarrival", "min_alarm_delay", "max_steps", "deadline"):
             if key in t:
                 c.fail(where, f"'{key}' is not allowed for a background task")
         prio = None
@@ -297,9 +301,12 @@ def _parse_task(c: _Ctx, i: int, t: dict, unit_us: int) -> Task:
         prio = _uint(c, where, "prio", t["prio"], 255)
 
     task = Task(name=name, prio=prio, triggers=trig)
-    for key in ("period", "offset", "budget", "alive_window", "min_interarrival", "deadline"):
+    for key in ("period", "offset", "budget", "alive_window", "min_interarrival",
+                "min_alarm_delay", "deadline"):
         if key in t:
             setattr(task, key, _time(c, where, key, t[key], unit_us))
+    if "min_alarm_delay" in t and task.min_alarm_delay == 0:
+        c.fail(where, "'min_alarm_delay' must be > 0")
     if "max_steps" in t:
         task.max_steps = _uint(c, where, "max_steps", t["max_steps"], 0xFFFF)
         if task.max_steps == 0:
@@ -406,11 +413,13 @@ def check_platform(cfg: Config, p: Platform) -> None:
 
 
 def _streams(t: Task) -> list[int] | None:
-    """Release streams of a task (D17): a periodic stream (period) and an
-    event stream (min_interarrival). They are independent, so their releases
-    ADD UP: in a window R a task is released at most sum(ceil(R / T)) times
-    -- taking only the smaller interval would undercount (an event just
-    before and another just after a periodic release). None = rate unknown."""
+    """Release streams of a task (D17): a periodic stream (period), an event
+    stream (min_interarrival) and an alarm stream (min_alarm_delay). They are
+    independent, so their releases ADD UP: in a window R a task is released at
+    most sum(ceil(R / T)) times -- taking only the smaller interval would
+    undercount (an event just before and another just after a periodic
+    release). An alarm is set from within a step and replaces a pending one,
+    so its expiries are at least min_alarm_delay apart. None = rate unknown."""
     out = []
     if "periodic" in t.triggers:
         out.append(t.period)
@@ -418,7 +427,11 @@ def _streams(t: Task) -> list[int] | None:
         if not t.min_interarrival:
             return None                 # an event task without a bound on its arrivals
         out.append(t.min_interarrival)
-    return out or None
+    if not out:
+        return None
+    if t.min_alarm_delay:
+        out.append(t.min_alarm_delay)
+    return out
 
 
 def _releases(streams: list[int], window: int) -> int:
@@ -442,9 +455,19 @@ def schedulability(cfg: Config) -> list[tuple[str, str]]:
       D_i = deadline (default: the shortest release interval of i)
       B_i = longest step of any lower-priority or background task
       k_i = 1 + (n_i - 1) // again_limit_i     (each yield admits one lower step)
-      R_i = k_i * B_i + n_i * C_i + sum_hp releases_j(R_i) * n_j * C_j
-    Verdicts: PASS (all inputs given, R <= D), CONDITIONAL (R <= D, but some
-    max_steps was assumed to be 1), FAIL (R > D), N/A (inputs missing)."""
+      S_i = max(B_i, C_i) if i has two or more release streams, else B_i
+      R_i = (k_i - 1) * B_i + S_i + n_i * C_i + sum_hp releases_j(R_i) * n_j * C_j
+    S_i: with one stream and R_i <= T_i a release never meets a job of its own
+    task. Otherwise -- several streams, or R_i beyond the shortest release
+    interval -- a release can arrive just after the final step of an earlier
+    job of the same task was dispatched, and waits for that step instead of a
+    lower one. It never waits for more: releases that find a job pending (not
+    yet started) or between its steps merge into it (one ready bit), so when
+    R_i exceeds the release interval, one job must serve all merged releases
+    within max_steps -- an assumption the report states.
+    Verdicts: PASS (all inputs given, R <= D), CONDITIONAL (R <= D under a
+    stated assumption: max_steps taken as 1, dispatch_overhead taken as 0,
+    merged releases), FAIL (R > D), N/A (inputs missing)."""
     ov = cfg.dispatch_overhead
     fg = [t for t in cfg.tasks if not t.background]
     rows = []
@@ -474,25 +497,40 @@ def schedulability(cfg: Config) -> list[tuple[str, str]]:
         k = 1 + ((n - 1) // t.again_limit if t.again_limit else 0)
         B = max(lower, default=0) + (ov if lower else 0)
         C = t.budget + ov
-        R = k * B + n * C
-        while True:
-            Rn = k * B + n * C + sum(_releases(_streams(h), R) * _steps(h) * (h.budget + ov)
-                                     for h in hp)
-            if Rn == R or Rn > 100 * D:
-                break
-            R = Rn
-        R = Rn
+
+        def solve(S):
+            R = (k - 1) * B + S + n * C
+            while True:
+                Rn = (k - 1) * B + S + n * C + sum(
+                    _releases(_streams(h), R) * _steps(h) * (h.budget + ov) for h in hp)
+                if Rn == R or Rn > 100 * D:
+                    return Rn
+                R = Rn
+
+        multi = len(streams) > 1
+        R = solve(max(B, C) if multi else B)
+        merged = R > min(streams)
+        if merged and not multi:
+            R = solve(max(B, C))
         if R > 100 * D:
             rows.append((t.name, f"{FAIL}: R > 100 * D = {100 * D} (search stopped; "
                                  f"higher-priority load U = {u_hp:.2f})"))
             continue
-        assumed = [x.name for x in [t] + hp if not x.max_steps]
         if R > D:
-            cls, rel = FAIL, ">"
-        else:
-            cls, rel = (CONDITIONAL if assumed else PASS), "<="
-        note = f"  [assumes 1 step per job for: {', '.join(assumed)}]" if assumed else ""
-        rows.append((t.name, f"{cls}: R = {R} {rel} D = {D}{note}"))
+            rows.append((t.name, f"{FAIL}: R = {R} > D = {D}"))
+            continue
+        notes = []
+        assumed = [x.name for x in [t] + hp if not x.max_steps]
+        if assumed:
+            notes.append(f"assumes 1 step per job for: {', '.join(assumed)}")
+        if merged:
+            notes.append(f"R > release interval {min(streams)}: releases merge, one job "
+                         f"must serve them within max_steps")
+        if not cfg.overhead_given:
+            notes.append("dispatch_overhead not given, taken as 0")
+        cls = CONDITIONAL if notes else PASS
+        note = "".join(f"  [{x}]" for x in notes)
+        rows.append((t.name, f"{cls}: R = {R} <= D = {D}{note}"))
     return rows
 
 
@@ -669,10 +707,14 @@ def render_report(cfg: Config, platform: Platform | None) -> str:
             lines.append(f"{r.rid:<3} {r.name:<20} {r.elem_type:<20} {r.capacity:<5} "
                          f"{r.producer} -> {r.consumer} ({r.notify or '-'})")
     lines += ["", "schedulability (non-preemptive fixed priority, design-time estimate):",
-              f"  per-step kernel overhead included: {cfg.dispatch_overhead or 0} "
-              f"(set [kernel] dispatch_overhead from a target measurement)",
+              (f"  per-step kernel overhead included: {cfg.dispatch_overhead}"
+               if cfg.overhead_given else
+               "  per-step kernel overhead NOT given, taken as 0: set [kernel] dispatch_overhead\n"
+               "  from a target measurement (until then no verdict is better than CONDITIONAL)"),
               "  NOT included: release scan and supervision passes, platform wait/wake-up",
               "  latency, interrupt handlers, and anything outside the task steps.",
+              "  Alarms count only for tasks that give min_alarm_delay; a task that sets",
+              "  alarms without it is analysed as if it set none.",
               "  PASS = all inputs given and R <= D; CONDITIONAL = holds only under the noted",
               "  assumptions; FAIL = R > D; N/A = inputs missing. Budgets are assumptions",
               "  to be checked against target measurements, not proven WCETs."]

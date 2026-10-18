@@ -112,12 +112,16 @@ class Valid(unittest.TestCase):
         with open(PIPELINE, "rb") as f:
             cfg = sosgen.parse(tomllib.load(f), "app.toml")
         verdicts = dict(sosgen.schedulability(cfg))
-        # ingress: B = 200 (worker step), n = 1; D = min(1 ms, 400 us)
-        self.assertEqual(verdicts["ingress"], "PASS: R = 300 <= D = 400")
-        # worker: k = 2, n = 3: 2*60 + 3*200 + (ceil(R/1000) + ceil(R/400)) * 100
-        self.assertEqual(verdicts["worker"], "PASS: R = 1320 <= D = 3600")
+        ov = "  [dispatch_overhead not given, taken as 0]"
+        # ingress: two streams, S = max(B = 200 (worker step), C = 100); D = min(1 ms, 400 us)
+        self.assertEqual(verdicts["ingress"], "CONDITIONAL: R = 300 <= D = 400" + ov)
+        # worker: k = 2, n = 3; R > 1200 so S = max(60, 200):
+        # 60 + 200 + 3*200 + (ceil(R/1000) + ceil(R/400)) * 100 = 860 + 6*100
+        self.assertEqual(verdicts["worker"],
+                         "CONDITIONAL: R = 1460 <= D = 3600  [R > release interval 1200: "
+                         "releases merge, one job must serve them within max_steps]" + ov)
         # heartbeat: 60 + 20 + ingress releases * 100 + ceil(R/1200) * 3 * 200
-        self.assertEqual(verdicts["heartbeat"], "PASS: R = 1180 <= D = 5000")
+        self.assertEqual(verdicts["heartbeat"], "CONDITIONAL: R = 1180 <= D = 5000" + ov)
 
 
 class Rejects(unittest.TestCase):
@@ -263,11 +267,13 @@ class PlatformChecks(unittest.TestCase):
             d["task"][2].update(budget="50us")
         cfg = sosgen.parse(cfg_with(m))
         lo = dict(sosgen.schedulability(cfg))["lo"]
-        # 50 (bg) + 300 + hi releases: ceil(R/1ms)*100; lo's D = min(10 ms, 1 ms)
-        self.assertTrue(lo.startswith("CONDITIONAL: R = 450 <= D = 1000"), lo)
+        # two streams: S = max(B = 50 (bg), C = 300) -- a release may meet the final
+        # step of lo's own job; + 300 + hi releases ceil(R/1ms)*100; D = min(10 ms, 1 ms)
+        self.assertTrue(lo.startswith("CONDITIONAL: R = 700 <= D = 1000"), lo)
 
     def test_schedulability_counts_steps_and_yields(self):
         def m(d):
+            d["kernel"] = {"dispatch_overhead": "0us"}
             d["task"][1].update(budget="100us", min_interarrival="10ms", max_steps=20,
                                 again_limit=5)
             d["task"][0].update(budget="200us", max_steps=1)
@@ -282,7 +288,7 @@ class PlatformChecks(unittest.TestCase):
     def test_schedulability_two_release_streams(self):
         # H: periodic 10 ms AND events every >= 10 ms -> up to 2 releases in a short
         # window (event just before and just after the periodic release)
-        doc = {"task": [
+        doc = {"kernel": {"dispatch_overhead": "0us"}, "task": [
             {"name": "h", "prio": 0, "trigger": ["periodic", "event"], "period": "10ms",
              "events": ["E"], "min_interarrival": "10ms", "budget": "1ms", "max_steps": 1,
              "run": "h_run"},
@@ -306,7 +312,9 @@ class PlatformChecks(unittest.TestCase):
              "budget": "100us", "max_steps": 1, "run": "l_run"}]}
         v = dict(sosgen.schedulability(sosgen.parse(doc)))
         self.assertEqual(v["l"], "FAIL: diverges (higher-priority load U = 1.20 >= 1)")
-        self.assertTrue(v["h"].startswith("FAIL: R = 1300 > D = 1000"))   # 100 (l) + 2*600
+        # 100 (l) + 2*600 = 1300 > T, so h may also wait for its own final step:
+        # 600 + 2*600
+        self.assertTrue(v["h"].startswith("FAIL: R = 1800 > D = 1000"), v["h"])
 
     def test_dispatch_overhead(self):
         doc = {"kernel": {"dispatch_overhead": "10us"}, "task": [
@@ -324,6 +332,50 @@ class PlatformChecks(unittest.TestCase):
             d["task"][2].update(budget="50us")
         v = dict(sosgen.schedulability(sosgen.parse(cfg_with(m))))
         self.assertIn("assumes 1 step per job for: lo, hi", v["lo"])
+
+    def test_overhead_not_given_is_conditional(self):
+        doc = {"task": [{"name": "a", "prio": 0, "trigger": ["periodic"], "period": "1ms",
+                         "budget": "100us", "max_steps": 1, "run": "r"}]}
+        v = dict(sosgen.schedulability(sosgen.parse(doc)))
+        self.assertEqual(v["a"], "CONDITIONAL: R = 100 <= D = 1000  "
+                                 "[dispatch_overhead not given, taken as 0]")
+        doc["kernel"] = {"dispatch_overhead": "0us"}             # stated, e.g. measured
+        v = dict(sosgen.schedulability(sosgen.parse(doc)))
+        self.assertEqual(v["a"], "PASS: R = 100 <= D = 1000")
+
+    def test_alarm_stream(self):
+        # h sets alarms at least 2 ms apart: a third release stream next to period
+        # and events, so l sees ceil(R/10ms) + ceil(R/2ms) releases of h
+        doc = {"kernel": {"dispatch_overhead": "0us"}, "task": [
+            {"name": "h", "prio": 0, "trigger": ["periodic"], "period": "10ms",
+             "min_alarm_delay": "2ms", "budget": "1ms", "max_steps": 1, "run": "h_run"},
+            {"name": "l", "prio": 1, "trigger": ["periodic"], "period": "20ms",
+             "budget": "1ms", "max_steps": 1, "run": "l_run"}]}
+        v = dict(sosgen.schedulability(sosgen.parse(doc)))
+        # 1000 + (ceil(4000/10ms) + ceil(4000/2ms)) * 1000; without the alarm stream 2000
+        self.assertEqual(v["l"], "PASS: R = 4000 <= D = 20000")
+        # h itself: two streams, S = max(B = 1 ms, C = 1 ms); D = min(10 ms, 2 ms)
+        self.assertEqual(v["h"], "PASS: R = 2000 <= D = 2000")
+
+    def test_alarm_delay_checks(self):
+        with self.assertRaisesRegex(ConfigError, "'min_alarm_delay' must be > 0"):
+            sosgen.parse(cfg_with(lambda d: d["task"][0].update(min_alarm_delay="0us")))
+        with self.assertRaisesRegex(ConfigError, "not allowed for a background task"):
+            sosgen.parse(cfg_with(lambda d: d["task"][2].update(min_alarm_delay="1ms")))
+
+    def test_own_job_blocks_when_releases_overlap(self):
+        # one stream, but R > T (deadline 3 ms): a release can come just after the
+        # final step of the previous job was dispatched and wait for it (S = C)
+        doc = {"kernel": {"dispatch_overhead": "0us"}, "task": [
+            {"name": "h", "prio": 0, "trigger": ["periodic"], "period": "1ms",
+             "budget": "700us", "max_steps": 1, "run": "h_run"},
+            {"name": "a", "prio": 1, "trigger": ["periodic"], "period": "1ms",
+             "deadline": "3ms", "budget": "400us", "max_steps": 1, "run": "a_run"}]}
+        v = dict(sosgen.schedulability(sosgen.parse(doc)))
+        # S = B = 0 gives 1800 > T; then S = 400: 400 + 400 + ceil(R/1ms) * 700 = 2900
+        self.assertEqual(v["a"], "CONDITIONAL: R = 2900 <= D = 3000  [R > release interval "
+                                 "1000: releases merge, one job must serve them within "
+                                 "max_steps]")
 
     def test_schedulability_needs_budgets(self):
         cfg = sosgen.parse(copy.deepcopy(BASE))                 # no budgets at all
