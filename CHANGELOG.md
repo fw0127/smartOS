@@ -28,6 +28,25 @@
   counter; wake-up never later than 1 ms after the deadline).
 - Thread test: 1 s supervision tick so a lost wake-up cannot hide behind
   the 10 ms tick; 200 ms bound (21 ms under TSan on a CI runner had failed).
+- Fix (D19): the schedulability estimate could be optimistic. A task with
+  two or more release streams (or whose R exceeds its release interval) can
+  have a release arrive just after the final step of its own previous job
+  was dispatched; the formula now charges that step (S_i = max(B_i, C_i)).
+  Found by a new independent check, `tools/sosgen/test_oracle.py`: a
+  step-level model of `sos_poll` written from the kernel source, run on
+  random task sets; 13 of 788 bounds were exceeded before the fix, none of
+  ~10 000 after.
+- `sosgen`: new task key `min_alarm_delay`; alarms are a third release
+  stream. Without `[kernel] dispatch_overhead` no verdict is better than
+  CONDITIONAL. A deadline beyond the release interval is analysed (merged
+  releases, CONDITIONAL) instead of being silently out of model.
+- Change (D18): `sos_task_stop` / `sos_task_restart` on a task from inside
+  its own `done()` return `SOS_E_STATE`. Before, on the stop path the
+  request was kept and the stopped task was restarted afterwards; on the
+  restart path it was dropped while returning `SOS_OK`. The task state
+  after a failed `init` is now specified per policy and tested.
+- CI: actions/checkout v5 and setup-python v6 (Node 24); runners pinned to
+  `ubuntu-24.04` and `macos-15`.
 
 ## v0.5.2 — third review round
 

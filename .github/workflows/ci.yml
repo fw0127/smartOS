@@ -9,17 +9,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-15]   # pinned: no silent image upgrades
         cc: [gcc, clang]
         exclude:
-          - os: macos-latest
+          - os: macos-15
             cc: gcc            # gcc is clang on macOS runners
     runs-on: ${{ matrix.os }}
     env:
       CC: ${{ matrix.cc }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: tests (virtual time, threads, generator, contract) and examples
@@ -34,9 +34,9 @@ jobs:
   avr:
     # Arduino Nano (ATmega328P) platform: firmware must build warning-free.
     # Simulation/hardware results are recorded in platform/avr_nano/README.md.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: install avr-gcc and simavr
         run: sudo apt-get update && sudo apt-get install -y gcc-avr avr-libc binutils-avr simavr
       - name: build contract and demo firmware
